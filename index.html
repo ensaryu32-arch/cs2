@@ -780,6 +780,17 @@
                         const msg = JSON.parse(event.data);
                         console.log('[CS Multiplayer] Guest received control message:', msg);
                         if (msg.type === 'GUEST_ASSIGNED') {
+                            if (!msg.hostReady) {
+                                // Odada kurucu yoksa beklemek yerine SENİ kurucu yapıp anında haritayı açıyoruz!
+                                console.log('[CS Multiplayer] No host in room yet! Promoting player to HOST...');
+                                window.showMultiplayerStatus(`🎮 Kurucu sen oldun! Harita hemen açılıyor... (${room.map})`);
+                                setTimeout(() => {
+                                    window.hideMultiplayerStatus();
+                                    window.launchRoom(room, team || '1', 'host');
+                                }, 300);
+                                return;
+                            }
+
                             window.showMultiplayerStatus(`🎮 Bağlanılıyor... (${room.map})`);
                             setTimeout(() => {
                                 if (window.csCmd) {
@@ -790,10 +801,17 @@
                             if (window.guestConnectRetryTimer) clearTimeout(window.guestConnectRetryTimer);
                             window.guestConnectRetryTimer = setTimeout(() => {
                                 if (window.isInMatch && window.currentMultiplayerRole === 'guest') {
-                                    console.log('[CS Multiplayer] Checking connection, sending retry...');
-                                    if (window.csCmd) window.csCmd('reconnect');
+                                    console.log('[CS Multiplayer] Host packet timeout, promoting to host...');
+                                    window.hideMultiplayerStatus();
+                                    window.launchRoom(room, team || '1', 'host');
                                 }
-                            }, 5000);
+                            }, 4000);
+                        } else if (msg.type === 'HOST_READY') {
+                            console.log('[CS Multiplayer] Host is ready, connecting now...');
+                            window.showMultiplayerStatus(`🎮 Kurucu oyunda! Bağlanılıyor... (${room.map})`);
+                            if (window.csCmd) {
+                                window.csCmd(`stop; name "${curNick}"; connect 127.0.0.1:27015`);
+                            }
                         } else if (msg.type === 'HOST_DISCONNECTED') {
                             window.hideMultiplayerStatus();
                             alert('⚠️ ' + (msg.message || 'Oda kurucusu ayrıldı!'));
@@ -854,6 +872,7 @@
             const actualRole = role || (room.isHost ? 'host' : 'guest');
 
             if (actualRole === 'host') {
+                window.hideMultiplayerStatus();
                 setupHostRelay(room, curNick);
                 const botCmd = isVs ? 'bot_quota 0; bot_kick;' : 'bot_quota 4; bot_difficulty 1;';
                 if (window.csCmd) {
@@ -912,6 +931,9 @@
 
         window.exitGame = function() {
             window.isInMatch = false;
+            window.hideMultiplayerStatus();
+            const sp = document.getElementById('cs-room-share-pill');
+            if (sp) sp.style.display = 'none';
             if (window.activeMultiplayerWs) {
                 try { window.activeMultiplayerWs.close(); } catch(e) {}
                 window.activeMultiplayerWs = null;
