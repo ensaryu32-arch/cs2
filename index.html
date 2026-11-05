@@ -882,28 +882,22 @@
                 setupGuestRelay(room, curNick, preselectedTeam);
             }
 
-            setTimeout(() => {
-                if (window.csCmd) {
-                    if (actualRole === 'host') {
-                        if (isVs) {
-                            window.csCmd('bot_quota 0; bot_kick; mp_autoteambalance 1; mp_limitteams 1; mp_freezetime 2; mp_roundtime 1.75; mp_startmoney 800; crosshair 1; ui_renderworld 1');
-                        } else {
-                            window.csCmd('mp_autoteambalance 1; mp_limitteams 1; mp_startmoney 800; crosshair 1; ui_renderworld 1');
+            // Auto-spawn loop: Harita yüklenir yüklenmez oyuncuyu oyunda elinde silahla doğur!
+            const teamNum = preselectedTeam || '5';
+            const spawnCmd = `jointeam ${teamNum}; joinclass 1; crosshair 1; ui_renderworld 1`;
+
+            [1000, 2000, 3200, 4800, 6500].forEach(delay => {
+                setTimeout(() => {
+                    if (window.isInMatch && window.csCmd) {
+                        window.csCmd(spawnCmd);
+                        if (actualRole === 'host') {
+                            window.csCmd('mp_autoteambalance 1; mp_limitteams 1; mp_freezetime 2; mp_roundtime 1.75; mp_startmoney 800; crosshair 1; ui_renderworld 1');
                         }
                     }
-                    if (preselectedTeam) {
-                        window.csCmd(`jointeam ${preselectedTeam}; joinclass 1; crosshair 1; ui_renderworld 1`);
-                    }
-                }
+                }, delay);
+            });
 
-                // Show team selection for every player joining the room!
-                const hudPicker = document.getElementById('cs-hud-team-picker');
-                if (hudPicker) {
-                    hudPicker.style.display = 'block';
-                    const infoEl = document.getElementById('cs-hud-team-info');
-                    if (infoEl) infoEl.innerText = `Oda: ${room.name} (${room.map}) | Limit: ${halfP} Terörist vs ${halfP} Polis`;
-                }
-
+            setTimeout(() => {
                 // Show invite share pill on screen
             let sharePill = document.getElementById('cs-room-share-pill');
             if (!sharePill) {
@@ -1196,7 +1190,8 @@
 
     <!-- Floating Menu Pill -->
     <!-- Floating Menu Pill -->
-    <div id="cs-quick-bar" style="position: fixed; top: 12px; right: 15px; z-index: 2147483646; display: none;">
+    <div id="cs-quick-bar" style="position: fixed; top: 12px; right: 15px; z-index: 2147483646; display: none; gap: 8px;">
+        <button class="cs-bar-btn" style="background: #27ae60; color: #fff; font-weight: bold; border: 1px solid #2ecc71; font-size: 13px; padding: 7px 14px; box-shadow: 0 4px 12px rgba(46,204,113,0.4); cursor: pointer;" onclick="window.openRoomsModal()">🎮 Çok Oyunculu (Multiplayer)</button>
         <button class="cs-bar-btn cs-bar-btn-primary" style="font-size: 13px; padding: 7px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.6);" onclick="window.openMenu()">⚡ Menü / Ayarlar (F2 / Esc)</button>
     </div>
 
@@ -1571,7 +1566,7 @@
                             }
                             if (!document.pointerLockElement) {
                                 try {
-                                    if (window.csCmd) window.csCmd('ui_renderworld 1');
+                                    if (window.csCmd) window.csCmd('jointeam 5; joinclass 1; crosshair 1; ui_renderworld 1');
                                 } catch(e) {}
                                 if (canvas.requestPointerLock) canvas.requestPointerLock();
                             }
