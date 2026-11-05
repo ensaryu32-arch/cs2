@@ -500,8 +500,13 @@
         window.guestPacketQueue = [];
 
         window.WebSocket = function(url, protocols) {
-            if (typeof url === 'string' && (url.includes('127.0.0.') || url.includes(':27015') || url.includes(':27005'))) {
-                console.log('[CS Network] Intercepted socket:', url);
+            // NEVER intercept the Render / Node relay WebSocket!
+            if (typeof url === 'string' && url.includes('/relay')) {
+                return new OriginalWebSocket(url, protocols);
+            }
+
+            if (typeof url === 'string' && (url.includes(':27015') || url.includes(':27005') || url.startsWith('ws://127.0.0.'))) {
+                console.log('[CS Network] Intercepted engine game socket:', url);
                 const fakeWs = {
                     url: url,
                     readyState: 1,
@@ -511,6 +516,18 @@
                     onerror: null,
                     onclose: null,
                     send: function(data) {
+                        const u8 = data instanceof Uint8Array ? data : new Uint8Array(data.buffer || data);
+
+                        // Catch Emscripten 10-byte port handshake locally so it does not pollute the CS 1.6 engine:
+                        if (u8.length === 10 && u8[0] === 255 && u8[1] === 255 && u8[2] === 255 && u8[3] === 255 && u8[4] === 112 && u8[5] === 111 && u8[6] === 114 && u8[7] === 116) {
+                            setTimeout(() => {
+                                if (fakeWs.onmessage) {
+                                    fakeWs.onmessage({ data: new Uint8Array([255, 255, 255, 255, 112, 111, 114, 116, 105, 135]).buffer });
+                                }
+                            }, 5);
+                            return;
+                        }
+
                         if (window.currentMultiplayerRole === 'guest') {
                             if (window.activeMultiplayerWs && window.activeMultiplayerWs.readyState === 1) {
                                 window.activeMultiplayerWs.send(data);
@@ -627,6 +644,12 @@
             ws.binaryType = 'arraybuffer';
             window.activeMultiplayerWs = ws;
 
+            const keepAliveTimer = setInterval(() => {
+                if (ws.readyState === 1) {
+                    try { ws.send(JSON.stringify({ type: 'PING' })); } catch(e) {}
+                }
+            }, 10000);
+
             ws.onopen = function() {
                 console.log('[CS Multiplayer] Host connected to Render Relay for room:', room.id);
             };
@@ -688,6 +711,7 @@
             };
 
             ws.onclose = function() {
+                clearInterval(keepAliveTimer);
                 console.log('[CS Multiplayer] Host WebSocket closed');
             };
         }
@@ -701,6 +725,12 @@
             const ws = new WebSocket(wsUrl);
             ws.binaryType = 'arraybuffer';
             window.activeMultiplayerWs = ws;
+
+            const keepAliveTimer = setInterval(() => {
+                if (ws.readyState === 1) {
+                    try { ws.send(JSON.stringify({ type: 'PING' })); } catch(e) {}
+                }
+            }, 10000);
 
             ws.onopen = function() {
                 console.log('[CS Multiplayer] Guest connected to Render Relay for room:', room.id);
@@ -748,6 +778,7 @@
             };
 
             ws.onclose = function() {
+                clearInterval(keepAliveTimer);
                 console.log('[CS Multiplayer] Guest WebSocket closed');
             };
         }

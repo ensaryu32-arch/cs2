@@ -201,6 +201,13 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws, req) => {
+  ws.isAlive = true;
+  ws.missedPings = 0;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+    ws.missedPings = 0;
+  });
+
   const url = new URL(req.url, 'http://localhost');
   const roomId = url.searchParams.get('room');
   const role = url.searchParams.get('role'); // 'host' or 'guest'
@@ -269,6 +276,7 @@ wss.on('connection', (ws, req) => {
   }
 
   ws.on('message', (message, isBinary) => {
+    ws.isAlive = true;
     let isJson = false;
     if (typeof message === 'string') {
       isJson = true;
@@ -336,17 +344,17 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// Periodic ping to prevent Render connection timeouts
+// Periodic ping to keep Render connection alive
 const pingInterval = setInterval(() => {
   for (const client of wss.clients) {
-    if (client.isAlive === false) {
+    if (client.missedPings >= 4) {
       client.terminate();
       continue;
     }
-    client.isAlive = false;
+    client.missedPings = (client.missedPings || 0) + 1;
     client.ping();
   }
-}, 25000);
+}, 20000);
 
 wss.on('close', () => clearInterval(pingInterval));
 
