@@ -1,10 +1,10 @@
 services:
   - type: web
     name: cs2
-    runtime: docker
+    runtime: node
     plan: free
-    region: oregon
-    dockerfilePath: ./Dockerfile
+    buildCommand: npm install
+    startCommand: node server.js
     envVars:
       - key: PORT
-        value: 27016
+        value: 8080

@@ -370,6 +370,34 @@
             window.renderRoomsList(rooms);
         };
 
+        window.quickCreateVsRoom = async function() {
+            const curNick = localStorage.getItem('cs16_nickname') || 'Oyuncu';
+            const roomObj = {
+                id: 'room-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+                name: `${curNick}'in 16 Kişilik Arenası`,
+                hasPassword: false,
+                password: '',
+                map: 'de_dust2',
+                mode: 'vs',
+                team: '1',
+                maxPlayers: 16,
+                currentPlayers: 1,
+                status: 'Aktif 🟢',
+                createdAt: Date.now()
+            };
+
+            try {
+                await fetch('/api/rooms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(roomObj)
+                });
+            } catch(e) {}
+
+            roomObj.isHost = true;
+            window.launchRoom(roomObj, '1', 'host');
+        };
+
         window.renderRoomsList = function(rooms) {
             const container = document.getElementById('rooms-list-container');
             if (!container) return;
@@ -378,9 +406,9 @@
                 container.innerHTML = `
                     <div style="text-align: center; padding: 45px 20px; background: #1a1a1a; border-radius: 8px; border: 1px dashed #444;">
                         <div style="font-size: 34px; margin-bottom: 10px;">🎮</div>
-                        <div style="font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 6px;">Şu Anda Açık Canlı Oda Yok</div>
-                        <div style="font-size: 13px; color: #888; margin-bottom: 18px;">Fake odalar kaldırıldı. Yukarıdan "➕ Yeni Oda Kur" sekmesine tıklayarak kendi odanı hemen kurabilirsin!</div>
-                        <button class="cs-bar-btn cs-bar-btn-primary" onclick="window.switchRoomTab('create')" style="padding: 10px 22px; font-size: 14px;">➕ Yeni Oda Kur</button>
+                        <div style="font-size: 17px; font-weight: bold; color: #fff; margin-bottom: 6px;">Şu Anda Açık Canlı Oda Yok</div>
+                        <div style="font-size: 13px; color: #aaa; margin-bottom: 20px;">Hemen tek tıkla 16 kişilik VS odanı kur ve arkadaşlarına link atıp kapışmaya başla!</div>
+                        <button class="cs-bar-btn cs-bar-btn-primary" onclick="window.quickCreateVsRoom()" style="padding: 12px 28px; font-size: 15px; font-weight: bold; background: #2ecc71; border-color: #27ae60; color: #fff; box-shadow: 0 0 20px rgba(46,204,113,0.5);">⚔️ Hemen 16 Kişilik VS Odası Kur ve Başlat ➔</button>
                     </div>
                 `;
                 return;
@@ -678,10 +706,13 @@
                             port: guestPort,
                             socket: {
                                 readyState: 1,
+                                OPEN: 1,
+                                CLOSING: 2,
+                                CLOSED: 3,
                                 send: function(replyData) {
                                     if (ws.readyState !== 1) return;
                                     const replyBytes = replyData instanceof Uint8Array ? replyData : new Uint8Array(replyData.buffer || replyData);
-                                    if (replyBytes.length === 10 && replyBytes[0] === 255 && replyBytes[1] === 255 && replyBytes[2] === 255 && replyBytes[3] === 255) {
+                                    if (replyBytes.length === 10 && replyBytes[0] === 255 && replyBytes[1] === 255 && replyBytes[2] === 255 && replyBytes[3] === 255 && replyBytes[4] === 112) {
                                         return;
                                     }
                                     const tagged = new Uint8Array(1 + replyBytes.length);
@@ -700,6 +731,12 @@
                         port: guestPort,
                         data: packetPayload
                     });
+
+                    try {
+                        if (serverSock.stream && serverSock.stream.node && serverSock.stream.node.mount && serverSock.stream.node.mount.type) {
+                            serverSock.stream.node.mount.type.emit("message", serverSock.stream.fd);
+                        }
+                    } catch(e) {}
                 }
             };
 
@@ -776,15 +813,19 @@
                 // Deliver packet cleanly without duplication
                 if (window.csGameSocket && typeof window.csGameSocket.onmessage === 'function') {
                     window.csGameSocket.onmessage({ data: event.data });
-                } else {
-                    const clientSock = getClientSocket();
-                    if (clientSock) {
-                        clientSock.recv_queue.push({
-                            addr: '127.0.0.1',
-                            port: 27015,
-                            data: new Uint8Array(event.data)
-                        });
-                    }
+                }
+                const clientSock = getClientSocket();
+                if (clientSock) {
+                    clientSock.recv_queue.push({
+                        addr: '127.0.0.1',
+                        port: 27015,
+                        data: new Uint8Array(event.data)
+                    });
+                    try {
+                        if (clientSock.stream && clientSock.stream.node && clientSock.stream.node.mount && clientSock.stream.node.mount.type) {
+                            clientSock.stream.node.mount.type.emit("message", clientSock.stream.fd);
+                        }
+                    } catch(e) {}
                 }
             };
 
@@ -844,7 +885,23 @@
                     if (infoEl) infoEl.innerText = `Oda: ${room.name} (${room.map}) | Limit: ${halfP} Terörist vs ${halfP} Polis`;
                 }
 
-                window.teamPickTimeout = setTimeout(() => {
+                // Show invite share pill on screen
+            let sharePill = document.getElementById('cs-room-share-pill');
+            if (!sharePill) {
+                sharePill = document.createElement('div');
+                sharePill.id = 'cs-room-share-pill';
+                sharePill.style.cssText = 'position:fixed;top:15px;left:50%;transform:translateX(-50%);background:rgba(20,25,35,0.95);border:2px solid #ffcc00;color:#fff;padding:8px 18px;border-radius:25px;font-family:sans-serif;font-size:13px;z-index:999999;display:flex;align-items:center;gap:10px;box-shadow:0 0 20px rgba(255,204,0,0.5);cursor:pointer;user-select:none;';
+                document.body.appendChild(sharePill);
+            }
+            const inviteUrl = `${location.origin}${location.pathname}?room=${encodeURIComponent(room.id)}`;
+            sharePill.innerHTML = `<span>🔗 <b>Oda Davet Linki</b>: ${escapeHtml(room.name)}</span> <span style="background:#ffcc00;color:#111;font-weight:bold;padding:3px 9px;border-radius:12px;font-size:11px;">TIKLA KOPYALA</span>`;
+            sharePill.onclick = () => {
+                navigator.clipboard.writeText(inviteUrl);
+                alert('📋 Oda davet linki kopyalandı! Arkadaşlarına WhatsApp / Discord üzerinden gönder, tıklar tıklamaz senin oyununa gelsinler: \n\n' + inviteUrl);
+            };
+            sharePill.style.display = 'flex';
+
+            window.teamPickTimeout = setTimeout(() => {
                     const picker = document.getElementById('cs-hud-team-picker');
                     if (picker && picker.style.display === 'block') {
                         window.selectHudTeam(preselectedTeam || '5');
@@ -1502,6 +1559,27 @@
                         window.xash = engine;
                         setTimeout(() => {
                             if (window.csCmd) window.csCmd('ui_renderworld 1; unbind ESCAPE; bind ESCAPE ""; alias hazardcourse "maxplayers 16; bot_quota 4; map de_dust2"; alias training "maxplayers 16; bot_quota 4; map de_dust2"; hud_draw 1; crosshair 1');
+                            
+                            // Check if opened with room invite link (?room=...)
+                            const urlParams = new URLSearchParams(window.location.search);
+                            const inviteRoomId = urlParams.get('room');
+                            if (inviteRoomId) {
+                                console.log('[CS Multiplayer] Auto-joining room from URL param:', inviteRoomId);
+                                setTimeout(async () => {
+                                    try {
+                                        const res = await fetch('/api/rooms');
+                                        const rooms = await res.json();
+                                        const found = (rooms || []).find(r => r.id === inviteRoomId);
+                                        if (found) {
+                                            window.launchRoom(found, '1', 'guest');
+                                        } else {
+                                            window.launchRoom({ id: inviteRoomId, name: 'Özel VS Odası', map: 'de_dust2', mode: 'vs', maxPlayers: 16 }, '1', 'guest');
+                                        }
+                                    } catch(e) {
+                                        window.launchRoom({ id: inviteRoomId, name: 'Özel VS Odası', map: 'de_dust2', mode: 'vs', maxPlayers: 16 }, '1', 'guest');
+                                    }
+                                }, 1000);
+                            }
                         }, 500);
                         window.csCmd = (c) => {
                             try {
