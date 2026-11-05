@@ -781,7 +781,7 @@
                         console.log('[CS Multiplayer] Guest received control message:', msg);
                         if (msg.type === 'GUEST_ASSIGNED') {
                             if (!msg.hostReady) {
-                                // Odada kurucu yoksa beklemek yerine SENİ kurucu yapıp anında haritayı açıyoruz!
+                                // Odada kurucu yoksa beklemek ve siyah ekrana düşmek yerine SENİ anında kurucu yapıyoruz!
                                 console.log('[CS Multiplayer] No host in room yet! Promoting player to HOST...');
                                 window.showMultiplayerStatus(`🎮 Kurucu sen oldun! Harita hemen açılıyor... (${room.map})`);
                                 setTimeout(() => {
@@ -794,24 +794,35 @@
                             window.showMultiplayerStatus(`🎮 Bağlanılıyor... (${room.map})`);
                             setTimeout(() => {
                                 if (window.csCmd) {
-                                    window.csCmd(`stop; name "${curNick}"; connect 127.0.0.1:27015`);
+                                    window.csCmd(`name "${curNick}"; connect 127.0.0.1:27015`);
                                 }
-                            }, 400);
+                            }, 300);
 
                             if (window.guestConnectRetryTimer) clearTimeout(window.guestConnectRetryTimer);
                             window.guestConnectRetryTimer = setTimeout(() => {
                                 if (window.isInMatch && window.currentMultiplayerRole === 'guest') {
-                                    console.log('[CS Multiplayer] Host packet timeout, promoting to host...');
+                                    console.log('[CS Multiplayer] Host connection timeout! Starting map locally...');
                                     window.hideMultiplayerStatus();
                                     window.launchRoom(room, team || '1', 'host');
                                 }
-                            }, 4000);
+                            }, 3000);
                         } else if (msg.type === 'HOST_READY') {
                             console.log('[CS Multiplayer] Host is ready, connecting now...');
                             window.showMultiplayerStatus(`🎮 Kurucu oyunda! Bağlanılıyor... (${room.map})`);
-                            if (window.csCmd) {
-                                window.csCmd(`stop; name "${curNick}"; connect 127.0.0.1:27015`);
-                            }
+                            setTimeout(() => {
+                                if (window.csCmd) {
+                                    window.csCmd(`name "${curNick}"; connect 127.0.0.1:27015`);
+                                }
+                            }, 300);
+
+                            if (window.guestConnectRetryTimer) clearTimeout(window.guestConnectRetryTimer);
+                            window.guestConnectRetryTimer = setTimeout(() => {
+                                if (window.isInMatch && window.currentMultiplayerRole === 'guest') {
+                                    console.log('[CS Multiplayer] Host did not reply! Starting map locally...');
+                                    window.hideMultiplayerStatus();
+                                    window.launchRoom(room, team || '1', 'host');
+                                }
+                            }, 3000);
                         } else if (msg.type === 'HOST_DISCONNECTED') {
                             window.hideMultiplayerStatus();
                             alert('⚠️ ' + (msg.message || 'Oda kurucusu ayrıldı!'));

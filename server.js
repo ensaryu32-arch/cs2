@@ -73,7 +73,12 @@ const activeRooms = new Map();
 function getPublicRoomsList() {
   const list = [];
   for (const [id, room] of activeRooms.entries()) {
-    const currentPlayers = (room.hostWs ? 1 : 0) + room.guests.size;
+    const isHostLive = !!(room.hostWs && room.hostWs.readyState === WebSocket.OPEN);
+    if (!isHostLive && room.guests.size === 0) {
+      activeRooms.delete(id);
+      continue;
+    }
+    const currentPlayers = (isHostLive ? 1 : 0) + room.guests.size;
     list.push({
       id: room.id,
       name: room.name,
@@ -82,7 +87,7 @@ function getPublicRoomsList() {
       mode: room.mode,
       maxPlayers: room.maxPlayers,
       currentPlayers: currentPlayers,
-      status: room.hostWs ? 'Aktif 🟢' : 'Bekleniyor 🟡',
+      status: isHostLive ? 'Aktif 🟢' : 'Bekleniyor 🟡',
       createdAt: room.createdAt
     });
   }
