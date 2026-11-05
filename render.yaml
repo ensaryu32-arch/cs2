@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: cs2
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 27016
