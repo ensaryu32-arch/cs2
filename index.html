@@ -201,7 +201,7 @@
             const hudPicker = document.getElementById('cs-hud-team-picker');
             if (hudPicker) hudPicker.style.display = 'none';
             if (window.csCmd) {
-                window.csCmd(`menuselect ${teamNum}; menuselect 5; jointeam ${teamNum}; joinclass 1; crosshair 1; unpause; ui_renderworld 1`);
+                window.csCmd(`menuselect ${teamNum}; menuselect 5; jointeam ${teamNum}; joinclass 1; crosshair 1; ui_renderworld 1`);
             }
             const canvas = document.getElementById('canvas');
             if (canvas && canvas.requestPointerLock) {
@@ -492,23 +492,98 @@
             window.launchRoom(room, team, 'guest');
         };
 
+        const OriginalWebSocket = window.WebSocket;
         window.activeSockets = window.activeSockets || [];
         window.currentMultiplayerRole = null;
         window.activeMultiplayerWs = null;
         window.multiplayerRoom = null;
         window.guestPacketQueue = [];
 
+        window.WebSocket = function(url, protocols) {
+            if (typeof url === 'string' && (url.includes('127.0.0.') || url.includes(':27015') || url.includes(':27005'))) {
+                console.log('[CS Network] Intercepted socket:', url);
+                const fakeWs = {
+                    url: url,
+                    readyState: 1,
+                    binaryType: 'arraybuffer',
+                    onopen: null,
+                    onmessage: null,
+                    onerror: null,
+                    onclose: null,
+                    send: function(data) {
+                        if (window.currentMultiplayerRole === 'guest') {
+                            if (window.activeMultiplayerWs && window.activeMultiplayerWs.readyState === 1) {
+                                window.activeMultiplayerWs.send(data);
+                            } else {
+                                window.guestPacketQueue = window.guestPacketQueue || [];
+                                window.guestPacketQueue.push(data);
+                            }
+                        } else if (window.currentMultiplayerRole === 'host') {
+                            const match = /127\.0\.0\.(\d+):/.exec(url);
+                            const guestId = match ? parseInt(match[1], 10) : 2;
+                            if (window.activeMultiplayerWs && window.activeMultiplayerWs.readyState === 1) {
+                                const replyBytes = data instanceof Uint8Array ? data : new Uint8Array(data.buffer || data);
+                                const tagged = new Uint8Array(1 + replyBytes.length);
+                                tagged[0] = guestId;
+                                tagged.set(replyBytes, 1);
+                                window.activeMultiplayerWs.send(tagged.buffer);
+                            }
+                        }
+                    },
+                    close: function() {
+                        this.readyState = 3;
+                        if (this.onclose) this.onclose({ code: 1000, reason: 'Normal' });
+                    }
+                };
+
+                if (window.currentMultiplayerRole === 'guest') {
+                    window.csGameSocket = fakeWs;
+                } else if (window.currentMultiplayerRole === 'host') {
+                    const match = /127\.0\.0\.(\d+):/.exec(url);
+                    const guestId = match ? parseInt(match[1], 10) : 2;
+                    window.hostGuestSockets = window.hostGuestSockets || {};
+                    window.hostGuestSockets[guestId] = fakeWs;
+                }
+
+                setTimeout(() => {
+                    if (fakeWs.onopen) fakeWs.onopen({ type: 'open' });
+                }, 5);
+
+                return fakeWs;
+            }
+
+            return new OriginalWebSocket(url, protocols);
+        };
+        window.WebSocket.prototype = OriginalWebSocket.prototype;
+
         function getHostServerSocket() {
             if (window.xash && window.xash.FS && window.xash.FS.streams) {
                 for (const s of window.xash.FS.streams) {
-                    if (s && s.node && s.node.sock && !window.activeSockets.includes(s.node.sock)) {
-                        window.activeSockets.push(s.node.sock);
+                    if (s && s.node && s.node.sock) {
+                        const sock = s.node.sock;
+                        if (sock.sport === 27015 || (sock.type === 2 && sock.sport)) {
+                            return sock;
+                        }
+                    }
+                }
+                for (const s of window.xash.FS.streams) {
+                    if (s && s.node && s.node.sock && s.node.sock.type === 2) {
+                        return s.node.sock;
                     }
                 }
             }
-            const s = window.activeSockets.find(sock => sock && (sock.sport === 27015 || (sock.type === 2 && sock.sport)));
-            if (s) return s;
-            return window.activeSockets.find(sock => sock && sock.type === 2);
+            return window.activeSockets.find(s => s && s.type === 2);
+        }
+
+        function getClientSocket() {
+            if (window.xash && window.xash.FS && window.xash.FS.streams) {
+                for (const s of window.xash.FS.streams) {
+                    if (s && s.node && s.node.sock && s.node.sock.type === 2) {
+                        return s.node.sock;
+                    }
+                }
+            }
+            return window.activeSockets.find(s => s && s.type === 2);
         }
 
         function hookSockOps(sock_ops) {
@@ -527,6 +602,7 @@
                                 if (window.activeMultiplayerWs && window.activeMultiplayerWs.readyState === 1) {
                                     window.activeMultiplayerWs.send(data);
                                 } else {
+                                    window.guestPacketQueue = window.guestPacketQueue || [];
                                     window.guestPacketQueue.push(data);
                                 }
                             },
@@ -573,6 +649,10 @@
                 const guestAddr = `127.0.0.${guestId}`;
                 const guestPort = 27005;
                 const guestKey = `${guestAddr}:${guestPort}`;
+
+                if (window.hostGuestSockets && window.hostGuestSockets[guestId] && window.hostGuestSockets[guestId].onmessage) {
+                    window.hostGuestSockets[guestId].onmessage({ data: packetPayload.buffer || packetPayload });
+                }
 
                 const serverSock = getHostServerSocket();
                 if (!serverSock) {
@@ -642,7 +722,7 @@
                                 if (window.csCmd) {
                                     window.csCmd(`name "${curNick}"; connect 127.0.0.1:27015`);
                                 }
-                            }, 600);
+                            }, 400);
                         } else if (msg.type === 'HOST_DISCONNECTED') {
                             alert('⚠️ ' + (msg.message || 'Oda kurucusu ayrıldı!'));
                             window.exitGame();
@@ -651,16 +731,13 @@
                     return;
                 }
 
-                // Binary packet from host
-                let clientSock = window.activeSockets.find(s => s && s.type === 2);
-                if (!clientSock && window.xash && window.xash.FS && window.xash.FS.streams) {
-                    for (const s of window.xash.FS.streams) {
-                        if (s && s.node && s.node.sock && s.node.sock.type === 2) {
-                            clientSock = s.node.sock;
-                            break;
-                        }
-                    }
+                // Deliver packet to fake socket connected to engine
+                if (window.csGameSocket && window.csGameSocket.onmessage) {
+                    window.csGameSocket.onmessage({ data: event.data });
                 }
+
+                // Also push directly into client socket recv_queue
+                const clientSock = getClientSocket();
                 if (clientSock) {
                     clientSock.recv_queue.push({
                         addr: '127.0.0.1',
@@ -696,7 +773,7 @@
                 setupHostRelay(room, curNick);
                 const botCmd = isVs ? 'bot_quota 0; bot_kick;' : 'bot_quota 4; bot_difficulty 1;';
                 if (window.csCmd) {
-                    window.csCmd(`name "${curNick}"; maxplayers ${maxP}; mp_autoteambalance 1; mp_limitteams 1; sv_lan 0; ${botCmd} map ${room.map}`);
+                    window.csCmd(`name "${curNick}"; maxplayers ${maxP}; mp_autoteambalance 1; mp_limitteams 1; sv_lan 0; mp_startmoney 800; ${botCmd} map ${room.map}`);
                 }
             } else {
                 setupGuestRelay(room, curNick, preselectedTeam);
@@ -705,9 +782,9 @@
             setTimeout(() => {
                 if (window.csCmd) {
                     if (isVs) {
-                        window.csCmd('bot_quota 0; bot_kick; mp_autoteambalance 1; mp_limitteams 1; mp_freezetime 2; mp_roundtime 1.75; mp_startmoney 16000; crosshair 1; unpause; ui_renderworld 1');
+                        window.csCmd('bot_quota 0; bot_kick; mp_autoteambalance 1; mp_limitteams 1; mp_freezetime 2; mp_roundtime 1.75; mp_startmoney 800; crosshair 1; ui_renderworld 1');
                     } else {
-                        window.csCmd('mp_autoteambalance 1; mp_limitteams 1; crosshair 1; unpause; ui_renderworld 1');
+                        window.csCmd('mp_autoteambalance 1; mp_limitteams 1; mp_startmoney 800; crosshair 1; ui_renderworld 1');
                     }
                     if (preselectedTeam) {
                         window.csCmd(`jointeam ${preselectedTeam}; joinclass 1; crosshair 1; ui_renderworld 1`);
@@ -808,7 +885,7 @@
             const modal = document.getElementById('cs-menu-overlay');
             if (modal) modal.style.display = 'none';
             try {
-                if (window.csCmd) window.csCmd('unpause; ui_renderworld 1');
+                if (window.csCmd) window.csCmd('ui_renderworld 1');
             } catch(e) {}
             const canvas = document.getElementById('canvas');
             if (canvas && canvas.requestPointerLock) {
@@ -1028,7 +1105,7 @@
             <div style="display: flex; gap: 8px; margin-bottom: 20px;">
                 <button class="cs-modal-btn" style="flex: 1; background: #1e4b7a; color: #fff;" onclick="window.csCmd('toggleconsole'); window.closeMenu();">⌨️ Konsol (~)</button>
                 <button class="cs-modal-btn" style="flex: 1; background: #333; color: #ffcc00; border: 1px solid #ffcc00;" onclick="window.toggleFullscreen()">⛶ Tam Ekran (F11)</button>
-                <button class="cs-modal-btn" style="flex: 1; background: #2c3e50; color: #5dade2; border: 1px solid #5dade2;" onclick="window.csCmd('unpause; ui_renderworld 1; crosshair 1'); window.closeMenu();">🔄 Ekranı Çöz</button>
+                <button class="cs-modal-btn" style="flex: 1; background: #2c3e50; color: #5dade2; border: 1px solid #5dade2;" onclick="window.csCmd('ui_renderworld 1; crosshair 1'); window.closeMenu();">🔄 Ekranı Çöz</button>
             </div>
 
             <button style="width: 100%; padding: 13px; background: #28a745; color: #fff; font-weight: bold; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#218838'" onmouseout="this.style.background='#28a745'" onclick="window.closeMenu()">▶ OYUNA DÖN (Fareyi Kilitle)</button>
@@ -1321,7 +1398,7 @@
                             }
                             if (!document.pointerLockElement) {
                                 try {
-                                    if (window.csCmd) window.csCmd('unpause; ui_renderworld 1');
+                                    if (window.csCmd) window.csCmd('ui_renderworld 1');
                                 } catch(e) {}
                                 if (canvas.requestPointerLock) canvas.requestPointerLock();
                             }
@@ -1361,7 +1438,7 @@
                                 window.csCmd('maxplayers 16; mp_autoteambalance 0; mp_limitteams 0; bot_quota 4; map ' + mapName);
                             }
                             setTimeout(() => {
-                                if (window.csCmd) window.csCmd('jointeam 5; joinclass 5; crosshair 1; unpause; ui_renderworld 1');
+                                if (window.csCmd) window.csCmd('jointeam 5; joinclass 5; crosshair 1; ui_renderworld 1');
                                 const canvas = document.getElementById('canvas');
                                 if (canvas && canvas.requestPointerLock) canvas.requestPointerLock();
                             }, 1800);
