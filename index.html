@@ -603,36 +603,26 @@
             return window.activeSockets.find(s => s && s.type === 2);
         }
 
-        function hookSockOps(sock_ops) {
-            if (!sock_ops || sock_ops._relayHooked) return;
-            sock_ops._relayHooked = true;
-            const origCreatePeer = sock_ops.createPeer;
-            sock_ops.createPeer = function(sock, addr, port) {
-                if (window.currentMultiplayerRole === 'guest') {
-                    console.log('[CS Multiplayer] Guest createPeer intercepted for:', addr, port);
-                    const guestPeer = {
-                        addr: addr,
-                        port: port,
-                        socket: {
-                            readyState: 1,
-                            send: function(data) {
-                                if (window.activeMultiplayerWs && window.activeMultiplayerWs.readyState === 1) {
-                                    window.activeMultiplayerWs.send(data);
-                                } else {
-                                    window.guestPacketQueue = window.guestPacketQueue || [];
-                                    window.guestPacketQueue.push(data);
-                                }
-                            },
-                            close: function() {}
-                        },
-                        msg_send_queue: []
-                    };
-                    sock_ops.addPeer(sock, guestPeer);
-                    return guestPeer;
-                }
-                return origCreatePeer.apply(this, arguments);
-            };
-        }
+        window.showMultiplayerStatus = function(text) {
+            let el = document.getElementById('cs-net-status');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'cs-net-status';
+                el.style.cssText = 'position:fixed;top:25px;left:50%;transform:translateX(-50%);background:rgba(10,15,25,0.94);border:2px solid #00ff88;color:#00ff88;padding:12px 26px;border-radius:10px;font-family:monospace,sans-serif;font-size:15px;font-weight:bold;z-index:999999;box-shadow:0 0 25px rgba(0,255,136,0.5);display:flex;align-items:center;gap:12px;pointer-events:none;transition:opacity 0.3s;';
+                document.body.appendChild(el);
+            }
+            el.innerHTML = `<span>⏳</span> <span>${escapeHtml(text)}</span>`;
+            el.style.opacity = '1';
+            el.style.display = 'flex';
+        };
+
+        window.hideMultiplayerStatus = function() {
+            const el = document.getElementById('cs-net-status');
+            if (el) {
+                el.style.opacity = '0';
+                setTimeout(() => { if (el) el.style.display = 'none'; }, 300);
+            }
+        };
 
         function setupHostRelay(room, curNick) {
             window.currentMultiplayerRole = 'host';
@@ -673,41 +663,44 @@
                 const guestPort = 27005;
                 const guestKey = `${guestAddr}:${guestPort}`;
 
-                if (window.hostGuestSockets && window.hostGuestSockets[guestId] && window.hostGuestSockets[guestId].onmessage) {
+                if (window.hostGuestSockets && window.hostGuestSockets[guestId] && typeof window.hostGuestSockets[guestId].onmessage === 'function') {
                     window.hostGuestSockets[guestId].onmessage({ data: packetPayload.buffer || packetPayload });
-                }
+                } else {
+                    const serverSock = getHostServerSocket();
+                    if (!serverSock) {
+                        console.warn('[CS Multiplayer] Host server socket not ready yet, dropping packet');
+                        return;
+                    }
 
-                const serverSock = getHostServerSocket();
-                if (!serverSock) {
-                    console.warn('[CS Multiplayer] Host server socket not ready yet, dropping packet');
-                    return;
-                }
+                    if (!serverSock.peers[guestKey]) {
+                        serverSock.peers[guestKey] = {
+                            addr: guestAddr,
+                            port: guestPort,
+                            socket: {
+                                readyState: 1,
+                                send: function(replyData) {
+                                    if (ws.readyState !== 1) return;
+                                    const replyBytes = replyData instanceof Uint8Array ? replyData : new Uint8Array(replyData.buffer || replyData);
+                                    if (replyBytes.length === 10 && replyBytes[0] === 255 && replyBytes[1] === 255 && replyBytes[2] === 255 && replyBytes[3] === 255) {
+                                        return;
+                                    }
+                                    const tagged = new Uint8Array(1 + replyBytes.length);
+                                    tagged[0] = guestId;
+                                    tagged.set(replyBytes, 1);
+                                    ws.send(tagged.buffer);
+                                },
+                                close: function() {}
+                            },
+                            msg_send_queue: []
+                        };
+                    }
 
-                if (!serverSock.peers[guestKey]) {
-                    serverSock.peers[guestKey] = {
+                    serverSock.recv_queue.push({
                         addr: guestAddr,
                         port: guestPort,
-                        socket: {
-                            readyState: 1,
-                            send: function(replyData) {
-                                if (ws.readyState !== 1) return;
-                                const replyBytes = replyData instanceof Uint8Array ? replyData : new Uint8Array(replyData.buffer || replyData);
-                                const tagged = new Uint8Array(1 + replyBytes.length);
-                                tagged[0] = guestId;
-                                tagged.set(replyBytes, 1);
-                                ws.send(tagged.buffer);
-                            },
-                            close: function() {}
-                        },
-                        msg_send_queue: []
-                    };
+                        data: packetPayload
+                    });
                 }
-
-                serverSock.recv_queue.push({
-                    addr: guestAddr,
-                    port: guestPort,
-                    data: packetPayload
-                });
             };
 
             ws.onclose = function() {
@@ -719,6 +712,8 @@
         function setupGuestRelay(room, curNick, team) {
             window.currentMultiplayerRole = 'guest';
             window.multiplayerRoom = room;
+
+            window.showMultiplayerStatus(`🎮 ${room.name} odasına bağlanılıyor...`);
 
             const wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
             const wsUrl = `${wsProto}${location.host}/relay?room=${encodeURIComponent(room.id)}&role=guest&nick=${encodeURIComponent(curNick)}`;
@@ -748,12 +743,22 @@
                         const msg = JSON.parse(event.data);
                         console.log('[CS Multiplayer] Guest received control message:', msg);
                         if (msg.type === 'GUEST_ASSIGNED') {
+                            window.showMultiplayerStatus(`🎮 Bağlanılıyor... (${room.map})`);
                             setTimeout(() => {
                                 if (window.csCmd) {
-                                    window.csCmd(`name "${curNick}"; connect 127.0.0.1:27015`);
+                                    window.csCmd(`stop; name "${curNick}"; connect 127.0.0.1:27015`);
                                 }
                             }, 400);
+
+                            if (window.guestConnectRetryTimer) clearTimeout(window.guestConnectRetryTimer);
+                            window.guestConnectRetryTimer = setTimeout(() => {
+                                if (window.isInMatch && window.currentMultiplayerRole === 'guest') {
+                                    console.log('[CS Multiplayer] Checking connection, sending retry...');
+                                    if (window.csCmd) window.csCmd('reconnect');
+                                }
+                            }, 5000);
                         } else if (msg.type === 'HOST_DISCONNECTED') {
+                            window.hideMultiplayerStatus();
                             alert('⚠️ ' + (msg.message || 'Oda kurucusu ayrıldı!'));
                             window.exitGame();
                         }
@@ -761,24 +766,31 @@
                     return;
                 }
 
-                // Deliver packet to fake socket connected to engine
-                if (window.csGameSocket && window.csGameSocket.onmessage) {
-                    window.csGameSocket.onmessage({ data: event.data });
+                // First game packet received from host -> we are in game!
+                window.hideMultiplayerStatus();
+                if (window.guestConnectRetryTimer) {
+                    clearTimeout(window.guestConnectRetryTimer);
+                    window.guestConnectRetryTimer = null;
                 }
 
-                // Also push directly into client socket recv_queue
-                const clientSock = getClientSocket();
-                if (clientSock) {
-                    clientSock.recv_queue.push({
-                        addr: '127.0.0.1',
-                        port: 27015,
-                        data: new Uint8Array(event.data)
-                    });
+                // Deliver packet cleanly without duplication
+                if (window.csGameSocket && typeof window.csGameSocket.onmessage === 'function') {
+                    window.csGameSocket.onmessage({ data: event.data });
+                } else {
+                    const clientSock = getClientSocket();
+                    if (clientSock) {
+                        clientSock.recv_queue.push({
+                            addr: '127.0.0.1',
+                            port: 27015,
+                            data: new Uint8Array(event.data)
+                        });
+                    }
                 }
             };
 
             ws.onclose = function() {
                 clearInterval(keepAliveTimer);
+                window.hideMultiplayerStatus();
                 console.log('[CS Multiplayer] Guest WebSocket closed');
             };
         }
@@ -804,7 +816,7 @@
                 setupHostRelay(room, curNick);
                 const botCmd = isVs ? 'bot_quota 0; bot_kick;' : 'bot_quota 4; bot_difficulty 1;';
                 if (window.csCmd) {
-                    window.csCmd(`name "${curNick}"; maxplayers ${maxP}; mp_autoteambalance 1; mp_limitteams 1; sv_lan 0; mp_startmoney 800; ${botCmd} map ${room.map}`);
+                    window.csCmd(`name "${curNick}"; maxplayers ${maxP}; mp_autoteambalance 1; mp_limitteams 1; sv_lan 0; mp_startmoney 800; mp_roundtime 1.75; mp_freezetime 2; ${botCmd} map ${room.map}`);
                 }
             } else {
                 setupGuestRelay(room, curNick, preselectedTeam);
@@ -812,10 +824,12 @@
 
             setTimeout(() => {
                 if (window.csCmd) {
-                    if (isVs) {
-                        window.csCmd('bot_quota 0; bot_kick; mp_autoteambalance 1; mp_limitteams 1; mp_freezetime 2; mp_roundtime 1.75; mp_startmoney 800; crosshair 1; ui_renderworld 1');
-                    } else {
-                        window.csCmd('mp_autoteambalance 1; mp_limitteams 1; mp_startmoney 800; crosshair 1; ui_renderworld 1');
+                    if (actualRole === 'host') {
+                        if (isVs) {
+                            window.csCmd('bot_quota 0; bot_kick; mp_autoteambalance 1; mp_limitteams 1; mp_freezetime 2; mp_roundtime 1.75; mp_startmoney 800; crosshair 1; ui_renderworld 1');
+                        } else {
+                            window.csCmd('mp_autoteambalance 1; mp_limitteams 1; mp_startmoney 800; crosshair 1; ui_renderworld 1');
+                        }
                     }
                     if (preselectedTeam) {
                         window.csCmd(`jointeam ${preselectedTeam}; joinclass 1; crosshair 1; ui_renderworld 1`);
@@ -1331,11 +1345,63 @@
             }
 
             try {
-                updateStatus("Fetching game assets...");
-                const res = await fetch('./valve.zip');
-                const buffer = await res.arrayBuffer();
+                let buffer = null;
 
-                updateStatus("Extracting game files...");
+                // Check local browser disk cache (Cache API) first for instant startup!
+                try {
+                    const cache = await caches.open('cs16-asset-cache-v1');
+                    const cachedResponse = await cache.match('./valve.zip');
+                    if (cachedResponse) {
+                        updateStatus("Oyun dosyaları yerel hafızadan yükleniyor...");
+                        updateProgress(50);
+                        buffer = await cachedResponse.arrayBuffer();
+                        updateProgress(100);
+                    }
+                } catch(e) {
+                    console.warn('Cache API not available, will fetch directly:', e);
+                }
+
+                if (!buffer) {
+                    updateStatus("Oyun dosyaları sunucudan indiriliyor... (%0)");
+                    const res = await fetch('./valve.zip');
+                    if (!res.ok) throw new Error(`Sunucu hatası: HTTP ${res.status}`);
+
+                    const contentLength = +res.headers.get('Content-Length') || 465317233;
+                    const reader = res.body.getReader();
+                    let receivedLength = 0;
+                    const chunks = [];
+
+                    while(true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        receivedLength += value.length;
+
+                        const pct = Math.min(100, Math.floor((receivedLength / contentLength) * 100));
+                        const mbRecv = (receivedLength / (1024 * 1024)).toFixed(1);
+                        const mbTotal = (contentLength / (1024 * 1024)).toFixed(1);
+                        updateProgress(pct);
+                        updateStatus(`Oyun dosyaları indiriliyor... (%${pct} - ${mbRecv} MB / ${mbTotal} MB)`);
+                    }
+
+                    const allChunks = new Uint8Array(receivedLength);
+                    let pos = 0;
+                    for (const chunk of chunks) {
+                        allChunks.set(chunk, pos);
+                        pos += chunk.length;
+                    }
+                    buffer = allChunks.buffer;
+
+                    // Save to browser disk cache so it loads instantly on next visits!
+                    try {
+                        const cache = await caches.open('cs16-asset-cache-v1');
+                        await cache.put('./valve.zip', new Response(buffer.slice(0), {
+                            headers: { 'Content-Type': 'application/zip' }
+                        }));
+                    } catch(e) {}
+                }
+
+                updateStatus("Oyun dosyaları çıkartılıyor...");
                 const zip = await JSZip.loadAsync(buffer);
                 const files = {};
 
@@ -1387,9 +1453,6 @@
                                     window.activeSockets = window.activeSockets || [];
                                     if (!window.activeSockets.includes(sock)) {
                                         window.activeSockets.push(sock);
-                                    }
-                                    if (sock.sock_ops && typeof hookSockOps === 'function') {
-                                        hookSockOps(sock.sock_ops);
                                     }
                                 }
                                 return s;

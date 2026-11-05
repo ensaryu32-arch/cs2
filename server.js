@@ -275,8 +275,17 @@ wss.on('connection', (ws, req) => {
     }
   }
 
+  ws.missedPings = 0;
+  ws.isAlive = true;
+
+  ws.on('pong', () => {
+    ws.isAlive = true;
+    ws.missedPings = 0;
+  });
+
   ws.on('message', (message, isBinary) => {
     ws.isAlive = true;
+    ws.missedPings = 0;
     let isJson = false;
     if (typeof message === 'string') {
       isJson = true;
@@ -347,14 +356,14 @@ wss.on('connection', (ws, req) => {
 // Periodic ping to keep Render connection alive
 const pingInterval = setInterval(() => {
   for (const client of wss.clients) {
-    if (client.missedPings >= 4) {
+    if (client.missedPings >= 8) {
       client.terminate();
       continue;
     }
     client.missedPings = (client.missedPings || 0) + 1;
-    client.ping();
+    try { client.ping(); } catch(e) {}
   }
-}, 20000);
+}, 25000);
 
 wss.on('close', () => clearInterval(pingInterval));
 
