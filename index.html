@@ -1,0 +1,1401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Counter-Strike 1.6 - Browser Edition</title>
+    <style>
+        * {
+            cursor: default !important;
+        }
+        button, select, input, a, .cs-bar-btn, .cs-modal-btn {
+            cursor: pointer !important;
+        }
+        body {
+            margin: 0;
+            background: #000;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+
+        canvas {
+            width: 100vw;
+            height: 100vh;
+            top: 0;
+            left: 0;
+            position: fixed;
+            opacity: 0;
+            transition: opacity 1s ease-in;
+            cursor: default !important;
+        }
+
+        /* Custom In-Game Cursor for WASM Menu */
+        #cs-custom-cursor {
+            position: fixed;
+            pointer-events: none;
+            z-index: 2147483650 !important;
+            display: block;
+            width: 22px;
+            height: 22px;
+            transform: translate(0px, 0px);
+            filter: drop-shadow(1px 2px 4px rgba(0,0,0,0.9));
+        }
+
+        /* Loading screen */
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle, #1a1a1a 0%, #000 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            z-index: 10;
+            transition: opacity 0.5s ease-out;
+        }
+
+        #cs-title {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: #ffcc00;
+            text-shadow: 2px 2px 8px #000;
+            margin-bottom: 25px;
+        }
+
+        /* Progress bar container */
+        #progress-container {
+            width: 60%;
+            height: 25px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid #ffcc00;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 10px;
+            box-shadow: 0 0 10px #ffcc00;
+        }
+
+        /* Progress bar fill */
+        #progress-bar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #ffaa00, #ffcc00);
+            transition: width 0.2s ease;
+        }
+
+        /* Loading status text */
+        #loading-status {
+            margin-top: 15px;
+            font-size: 1rem;
+            text-align: center;
+        }
+
+        /* Fullscreen Button */
+        #fullscreen-btn {
+            display: none;
+            margin-top: 30px;
+            padding: 10px 20px;
+            background: #ffcc00;
+            color: #000;
+            border: none;
+            font-size: 1rem;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+
+        #fullscreen-btn:hover {
+            background: #ffaa00;
+        }
+
+        /* Top Helper Bar */
+        #cs-quick-bar {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 2147483646;
+            display: none;
+            gap: 6px;
+            background: rgba(15, 15, 15, 0.85);
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid #ffcc00;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+        }
+
+        .cs-bar-btn {
+            background: #2a2a2a;
+            color: #ddd;
+            border: 1px solid #555;
+            padding: 5px 9px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .cs-bar-btn:hover {
+            background: #444;
+            color: #fff;
+            border-color: #ffcc00;
+        }
+
+        .cs-bar-btn-primary {
+            background: #ffcc00;
+            color: #000;
+            font-weight: bold;
+            border-color: #ffcc00;
+        }
+
+        .cs-bar-btn-primary:hover {
+            background: #ffaa00;
+            color: #000;
+        }
+
+        .cs-modal-btn {
+            background: #2a2a2a;
+            color: #eee;
+            border: 1px solid #444;
+            padding: 10px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.15s;
+        }
+        .cs-modal-btn:hover {
+            background: #3a3a3a;
+            border-color: #ffcc00;
+            color: #fff;
+        }
+    </style>
+        <!-- Master Key & Menu Controller: Registered before raw.js -->
+    <script>
+        window.isMenuOpen = false;
+        window.isClosingMenu = false;
+        window.isInMatch = false;
+        window.isMultiplayerMatch = false;
+        window.activeMatchRoom = null;
+        window.playerNickname = localStorage.getItem('cs16_nickname') || 'Oyuncu';
+        window.activeRoomToJoin = null;
+                window.cachedRooms = [];
+
+        
+        // Ensure all inputs never lose typing focus or propagate to game engine
+        document.addEventListener('DOMContentLoaded', () => {
+            const inputs = document.querySelectorAll('input, select, textarea');
+            inputs.forEach(el => {
+                el.addEventListener('keydown', (e) => e.stopPropagation(), true);
+                el.addEventListener('keyup', (e) => e.stopPropagation(), true);
+                el.addEventListener('keypress', (e) => e.stopPropagation(), true);
+            });
+        });
+
+        
+        window.selectHudTeam = function(teamNum) {
+            if (window.teamPickTimeout) clearTimeout(window.teamPickTimeout);
+            const hudPicker = document.getElementById('cs-hud-team-picker');
+            if (hudPicker) hudPicker.style.display = 'none';
+            if (window.csCmd) {
+                window.csCmd(`menuselect ${teamNum}; menuselect 5; jointeam ${teamNum}; joinclass 1; crosshair 1; unpause; ui_renderworld 1`);
+            }
+            const canvas = document.getElementById('canvas');
+            if (canvas && canvas.requestPointerLock) {
+                try { canvas.requestPointerLock(); } catch(e) {}
+            }
+        };
+
+        
+        window.setPlayerName = function(nick) {
+            if (!nick || !nick.trim()) return;
+            nick = nick.trim().substring(0, 16);
+            localStorage.setItem('cs16_nickname', nick);
+            window.playerNickname = nick;
+            if (window.csCmd) {
+                window.csCmd(`name "${nick}"`);
+            }
+            const input = document.getElementById('cs-player-nick');
+            if (input) input.value = nick;
+            const status = document.getElementById('nick-save-status');
+            if (status) {
+                status.innerText = '✓ Kaydedildi: ' + nick;
+                setTimeout(() => { if (status) status.innerText = ''; }, 3000);
+            }
+        };
+
+        window.saveNickFromInput = function() {
+            const input = document.getElementById('cs-player-nick');
+            if (input) window.setPlayerName(input.value);
+        };
+
+        // --- MASTER POINTER LOCK GUARD ---
+        // Strictly blocks browser Pointer Lock when in the Main Menu or when any Modal is open!
+        const _origRequestPointerLock = Element.prototype.requestPointerLock;
+        Element.prototype.requestPointerLock = function() {
+            if (!window.isInMatch) {
+                console.warn('[PointerLock] Blocked: Main menu lobby active.');
+                return Promise.resolve ? Promise.resolve() : undefined;
+            }
+            const rModal = document.getElementById('cs-rooms-modal');
+            const mModal = document.getElementById('cs-menu-overlay');
+            const tModal = document.getElementById('cs-team-picker-modal');
+            if ((rModal && rModal.style.display === 'flex') ||
+                (mModal && mModal.style.display === 'flex') ||
+                (tModal && tModal.style.display === 'flex')) {
+                console.warn('[PointerLock] Blocked: UI Modal active.');
+                return Promise.resolve ? Promise.resolve() : undefined;
+            }
+            return _origRequestPointerLock.apply(this, arguments);
+        };
+
+        // --- Custom Mouse Cursor Tracking for WASM Menu ---
+                document.addEventListener('mousemove', (e) => {
+            const cur = document.getElementById('cs-custom-cursor');
+            const canvas = document.getElementById('canvas');
+            if (canvas && !document.pointerLockElement) {
+                canvas.style.setProperty('cursor', 'default', 'important');
+            }
+            const rModal = document.getElementById('cs-rooms-modal');
+            const mModal = document.getElementById('cs-menu-overlay');
+            const tModal = document.getElementById('cs-team-picker-modal');
+            const isModalOpen = (rModal && rModal.style.display === 'flex') ||
+                                (mModal && mModal.style.display === 'flex') ||
+                                (tModal && tModal.style.display === 'flex');
+
+            if (cur) {
+                if (!document.pointerLockElement && !isModalOpen) {
+                    cur.style.display = 'block';
+                    cur.style.left = e.clientX + 'px';
+                    cur.style.top = e.clientY + 'px';
+                } else {
+                    cur.style.display = 'none';
+                }
+            }
+        });
+
+        // --- Canvas Click Interceptor for Main Menu Items (Training Room & Multiplayer) ---
+        window.addEventListener('click', (e) => {
+            // Only active when not pointer locked (i.e. in the main menu) and not in in-game modal
+            if (document.pointerLockElement || window.isInMatch) return;
+            const menuModal = document.getElementById('cs-menu-overlay');
+            const roomsModal = document.getElementById('cs-rooms-modal');
+            if ((menuModal && menuModal.style.display === 'flex') || (roomsModal && roomsModal.style.display === 'flex')) return;
+
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const rx = e.clientX / w;
+            const ry = e.clientY / h;
+
+            // Main menu list is on the left: X = 4% to 32%
+            if (rx >= 0.04 && rx <= 0.32) {
+                // Item 1: Training Room (Y: ~44% - 53%)
+                if (ry >= 0.44 && ry <= 0.535) {
+                    console.log('Training Room clicked! Starting de_dust2 with bots...');
+                    window.startMap('de_dust2');
+                    return;
+                }
+                // Item 4: Multiplayer (Y: ~63% - 73%)
+                if (ry >= 0.63 && ry <= 0.73) {
+                    console.log('Multiplayer clicked! Opening Room System...');
+                    window.openRoomsModal();
+                    return;
+                }
+            }
+        }, true);
+
+        // --- Room Management Logic ---
+        window.openRoomsModal = function() {
+            const menuModal = document.getElementById('cs-menu-overlay');
+            if (menuModal) menuModal.style.display = 'none';
+            const roomsModal = document.getElementById('cs-rooms-modal');
+            if (roomsModal) roomsModal.style.display = 'flex';
+            window.switchRoomTab('public');
+            window.refreshRooms();
+            try {
+                if (document.pointerLockElement && document.exitPointerLock) {
+                    document.exitPointerLock();
+                }
+            } catch(e) {}
+        };
+
+        window.closeRoomsModal = function() {
+            const roomsModal = document.getElementById('cs-rooms-modal');
+            if (roomsModal) roomsModal.style.display = 'none';
+            // Return to WASM main menu
+        };
+
+        window.switchRoomTab = function(tab) {
+            const tabPub = document.getElementById('room-tab-public');
+            const tabCr = document.getElementById('room-tab-create');
+            const btnPub = document.getElementById('tab-btn-public');
+            const btnCr = document.getElementById('tab-btn-create');
+
+            if (tab === 'public') {
+                if (tabPub) tabPub.style.display = 'block';
+                if (tabCr) tabCr.style.display = 'none';
+                if (btnPub) { btnPub.style.background = '#2a2a2a'; btnPub.style.color = '#ffcc00'; btnPub.style.borderBottom = '2px solid #ffcc00'; }
+                if (btnCr) { btnCr.style.background = '#1a1a1a'; btnCr.style.color = '#888'; btnCr.style.borderBottom = 'none'; }
+            } else {
+                if (tabPub) tabPub.style.display = 'none';
+                if (tabCr) tabCr.style.display = 'block';
+                if (btnPub) { btnPub.style.background = '#1a1a1a'; btnPub.style.color = '#888'; btnPub.style.borderBottom = 'none'; }
+                if (btnCr) { btnCr.style.background = '#2a2a2a'; btnCr.style.color = '#ffcc00'; btnCr.style.borderBottom = '2px solid #ffcc00'; }
+            }
+        };
+        window.refreshRooms = async function() {
+            let rooms = [];
+            try {
+                const res = await fetch('/api/rooms');
+                if (res.ok) rooms = await res.json();
+            } catch(e) {}
+
+            if (!rooms || rooms.length === 0) {
+                try {
+                    const local = localStorage.getItem('cs16_rooms');
+                    if (local) {
+                        const parsed = JSON.parse(local);
+                        rooms = (parsed || []).filter(r => r && r.id && !r.id.startsWith('def-'));
+                        localStorage.setItem('cs16_rooms', JSON.stringify(rooms));
+                    }
+                } catch(e) {}
+            }
+
+            if (!rooms) rooms = [];
+            rooms = rooms.filter(r => r && r.id && !r.id.startsWith('def-'));
+            window.cachedRooms = rooms;
+            window.renderRoomsList(rooms);
+        };
+
+        window.renderRoomsList = function(rooms) {
+            const container = document.getElementById('rooms-list-container');
+            if (!container) return;
+
+            if (rooms.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 45px 20px; background: #1a1a1a; border-radius: 8px; border: 1px dashed #444;">
+                        <div style="font-size: 34px; margin-bottom: 10px;">🎮</div>
+                        <div style="font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 6px;">Şu Anda Açık Canlı Oda Yok</div>
+                        <div style="font-size: 13px; color: #888; margin-bottom: 18px;">Fake odalar kaldırıldı. Yukarıdan "➕ Yeni Oda Kur" sekmesine tıklayarak kendi odanı hemen kurabilirsin!</div>
+                        <button class="cs-bar-btn cs-bar-btn-primary" onclick="window.switchRoomTab('create')" style="padding: 10px 22px; font-size: 14px;">➕ Yeni Oda Kur</button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = rooms.map(r => `
+                <div style="background: #1c1c1c; border: 1px solid #333; border-radius: 8px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px; transition: border-color 0.2s;" onmouseover="this.style.borderColor=\'#ffcc00\'" onmouseout="this.style.borderColor=\'#333\'">
+                    <div>
+                        <div style="font-size: 15px; font-weight: bold; color: #fff; display: flex; align-items: center; gap: 8px;">
+                            ${escapeHtml(r.name)}
+                            ${r.hasPassword ? '<span style="font-size: 12px;" title="Şifreli Oda">🔒</span>' : '<span style="font-size: 12px;" title="Herkese Açık">🔓</span>'}
+                        </div>
+                        <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;">
+                            <span style="font-size: 11px; background: #2a2a2a; color: #ffcc00; padding: 2px 7px; border-radius: 4px; border: 1px solid #ffcc00;">🗺️ ${r.map}</span>
+                            <span style="font-size: 11px; background: ${r.mode === 'vs' ? '#5a1818' : '#1e3d59'}; color: #fff; padding: 2px 7px; border-radius: 4px;">${r.mode === 'vs' ? '⚔️ VS Modu (Bot Yok)' : '🤖 Botlu Mod'}</span>
+                            <span style="font-size: 11px; background: #222; color: #aaa; padding: 2px 7px; border-radius: 4px;">👥 ${r.currentPlayers || 1}/${r.maxPlayers || 2}</span>
+                            <span style="font-size: 11px; color: #2ecc71; margin-left: 4px;">${r.status || 'Aktif 🟢'}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <button class="cs-modal-btn" style="background: #28a745; color: #fff; font-weight: bold; padding: 8px 16px; border: none; font-size: 13px;" onclick="window.prepareJoinRoom(\'${r.id}\')">
+                            Odaya Katıl ➔
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        window.filterRooms = function() {
+            const query = (document.getElementById('room-search-input')?.value || '').toLowerCase();
+            const filtered = window.cachedRooms.filter(r =>
+                r.name.toLowerCase().includes(query) || r.map.toLowerCase().includes(query)
+            );
+            window.renderRoomsList(filtered);
+        };
+
+        window.handleCreateRoom = async function(e) {
+            e.preventDefault();
+            const name = document.getElementById('cr-name')?.value || 'Özel VS Odası';
+            const pass = document.getElementById('cr-password')?.value || '';
+            const map = document.getElementById('cr-map')?.value || 'de_dust2';
+            const mode = document.getElementById('cr-mode')?.value || 'vs';
+            const team = document.getElementById('cr-team')?.value || '1';
+            const maxPlayers = document.getElementById('cr-players')?.value || '2';
+
+            const roomObj = {
+                id: 'room-' + Date.now(),
+                name: name,
+                hasPassword: !!pass,
+                password: pass,
+                map: map,
+                mode: mode,
+                team: team,
+                maxPlayers: parseInt(maxPlayers, 10),
+                currentPlayers: 1,
+                status: 'Aktif 🟢',
+                createdAt: Date.now()
+            };
+
+            try {
+                let local = JSON.parse(localStorage.getItem('cs16_rooms') || '[]');
+                local.unshift(roomObj);
+                localStorage.setItem('cs16_rooms', JSON.stringify(local));
+            } catch(e) {}
+
+            try {
+                await fetch('/api/rooms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(roomObj)
+                });
+            } catch(e) {}
+
+            roomObj.isHost = true;
+            window.launchRoom(roomObj, team, 'host');
+        };
+
+        window.prepareJoinRoom = function(roomId) {
+            const room = window.cachedRooms.find(r => r.id === roomId);
+            if (!room) return;
+
+            if (room.hasPassword) {
+                const enteredPass = prompt('🔒 Bu oda şifreli! Lütfen oda şifresini girin:');
+                if (enteredPass === null) return;
+                if (room.password && enteredPass !== room.password) {
+                    alert('❌ Yanlış şifre!');
+                    return;
+                }
+            }
+
+            window.activeRoomToJoin = room;
+            const teamModal = document.getElementById('cs-team-picker-modal');
+            const roomTitle = document.getElementById('team-picker-room-title');
+            if (roomTitle) roomTitle.innerText = `"${room.name}" (${room.map}) - Hangi takımda oynamak istersin?`;
+            if (teamModal) teamModal.style.display = 'flex';
+        };
+
+        window.closeTeamPicker = function() {
+            const teamModal = document.getElementById('cs-team-picker-modal');
+            if (teamModal) teamModal.style.display = 'none';
+            window.activeRoomToJoin = null;
+        };
+
+        window.confirmJoinWithTeam = function(team) {
+            const room = window.activeRoomToJoin;
+            if (!room) return;
+            window.closeTeamPicker();
+            room.isHost = false;
+            window.launchRoom(room, team, 'guest');
+        };
+
+        window.activeSockets = window.activeSockets || [];
+        window.currentMultiplayerRole = null;
+        window.activeMultiplayerWs = null;
+        window.multiplayerRoom = null;
+        window.guestPacketQueue = [];
+
+        function getHostServerSocket() {
+            if (window.xash && window.xash.FS && window.xash.FS.streams) {
+                for (const s of window.xash.FS.streams) {
+                    if (s && s.node && s.node.sock && !window.activeSockets.includes(s.node.sock)) {
+                        window.activeSockets.push(s.node.sock);
+                    }
+                }
+            }
+            const s = window.activeSockets.find(sock => sock && (sock.sport === 27015 || (sock.type === 2 && sock.sport)));
+            if (s) return s;
+            return window.activeSockets.find(sock => sock && sock.type === 2);
+        }
+
+        function hookSockOps(sock_ops) {
+            if (!sock_ops || sock_ops._relayHooked) return;
+            sock_ops._relayHooked = true;
+            const origCreatePeer = sock_ops.createPeer;
+            sock_ops.createPeer = function(sock, addr, port) {
+                if (window.currentMultiplayerRole === 'guest') {
+                    console.log('[CS Multiplayer] Guest createPeer intercepted for:', addr, port);
+                    const guestPeer = {
+                        addr: addr,
+                        port: port,
+                        socket: {
+                            readyState: 1,
+                            send: function(data) {
+                                if (window.activeMultiplayerWs && window.activeMultiplayerWs.readyState === 1) {
+                                    window.activeMultiplayerWs.send(data);
+                                } else {
+                                    window.guestPacketQueue.push(data);
+                                }
+                            },
+                            close: function() {}
+                        },
+                        msg_send_queue: []
+                    };
+                    sock_ops.addPeer(sock, guestPeer);
+                    return guestPeer;
+                }
+                return origCreatePeer.apply(this, arguments);
+            };
+        }
+
+        function setupHostRelay(room, curNick) {
+            window.currentMultiplayerRole = 'host';
+            window.multiplayerRoom = room;
+
+            const wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+            const wsUrl = `${wsProto}${location.host}/relay?room=${encodeURIComponent(room.id)}&role=host&nick=${encodeURIComponent(curNick)}`;
+            const ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+            window.activeMultiplayerWs = ws;
+
+            ws.onopen = function() {
+                console.log('[CS Multiplayer] Host connected to Render Relay for room:', room.id);
+            };
+
+            ws.onmessage = function(event) {
+                if (typeof event.data === 'string') {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        console.log('[CS Multiplayer] Host received control message:', msg);
+                    } catch(e) {}
+                    return;
+                }
+
+                // Binary packet from guest
+                const buf = new Uint8Array(event.data);
+                if (buf.length < 2) return;
+                const guestId = buf[0];
+                const packetPayload = buf.subarray(1);
+
+                const guestAddr = `127.0.0.${guestId}`;
+                const guestPort = 27005;
+                const guestKey = `${guestAddr}:${guestPort}`;
+
+                const serverSock = getHostServerSocket();
+                if (!serverSock) {
+                    console.warn('[CS Multiplayer] Host server socket not ready yet, dropping packet');
+                    return;
+                }
+
+                if (!serverSock.peers[guestKey]) {
+                    serverSock.peers[guestKey] = {
+                        addr: guestAddr,
+                        port: guestPort,
+                        socket: {
+                            readyState: 1,
+                            send: function(replyData) {
+                                if (ws.readyState !== 1) return;
+                                const replyBytes = replyData instanceof Uint8Array ? replyData : new Uint8Array(replyData.buffer || replyData);
+                                const tagged = new Uint8Array(1 + replyBytes.length);
+                                tagged[0] = guestId;
+                                tagged.set(replyBytes, 1);
+                                ws.send(tagged.buffer);
+                            },
+                            close: function() {}
+                        },
+                        msg_send_queue: []
+                    };
+                }
+
+                serverSock.recv_queue.push({
+                    addr: guestAddr,
+                    port: guestPort,
+                    data: packetPayload
+                });
+            };
+
+            ws.onclose = function() {
+                console.log('[CS Multiplayer] Host WebSocket closed');
+            };
+        }
+
+        function setupGuestRelay(room, curNick, team) {
+            window.currentMultiplayerRole = 'guest';
+            window.multiplayerRoom = room;
+
+            const wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+            const wsUrl = `${wsProto}${location.host}/relay?room=${encodeURIComponent(room.id)}&role=guest&nick=${encodeURIComponent(curNick)}`;
+            const ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+            window.activeMultiplayerWs = ws;
+
+            ws.onopen = function() {
+                console.log('[CS Multiplayer] Guest connected to Render Relay for room:', room.id);
+                if (window.guestPacketQueue && window.guestPacketQueue.length > 0) {
+                    for (const q of window.guestPacketQueue) {
+                        ws.send(q);
+                    }
+                    window.guestPacketQueue = [];
+                }
+            };
+
+            ws.onmessage = function(event) {
+                if (typeof event.data === 'string') {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        console.log('[CS Multiplayer] Guest received control message:', msg);
+                        if (msg.type === 'GUEST_ASSIGNED') {
+                            setTimeout(() => {
+                                if (window.csCmd) {
+                                    window.csCmd(`name "${curNick}"; connect 127.0.0.1:27015`);
+                                }
+                            }, 600);
+                        } else if (msg.type === 'HOST_DISCONNECTED') {
+                            alert('⚠️ ' + (msg.message || 'Oda kurucusu ayrıldı!'));
+                            window.exitGame();
+                        }
+                    } catch(e) {}
+                    return;
+                }
+
+                // Binary packet from host
+                let clientSock = window.activeSockets.find(s => s && s.type === 2);
+                if (!clientSock && window.xash && window.xash.FS && window.xash.FS.streams) {
+                    for (const s of window.xash.FS.streams) {
+                        if (s && s.node && s.node.sock && s.node.sock.type === 2) {
+                            clientSock = s.node.sock;
+                            break;
+                        }
+                    }
+                }
+                if (clientSock) {
+                    clientSock.recv_queue.push({
+                        addr: '127.0.0.1',
+                        port: 27015,
+                        data: new Uint8Array(event.data)
+                    });
+                }
+            };
+
+            ws.onclose = function() {
+                console.log('[CS Multiplayer] Guest WebSocket closed');
+            };
+        }
+
+        window.launchRoom = function(room, preselectedTeam, role) {
+            window.isInMatch = true;
+            window.isMultiplayerMatch = true;
+            window.activeMatchRoom = room;
+
+            const roomsModal = document.getElementById('cs-rooms-modal');
+            if (roomsModal) roomsModal.style.display = 'none';
+            const teamModal = document.getElementById('cs-team-picker-modal');
+            if (teamModal) teamModal.style.display = 'none';
+            window.closeMenu();
+
+            const maxP = room.maxPlayers || 16;
+            const halfP = Math.floor(maxP / 2);
+            const isVs = (room.mode === 'vs');
+            const curNick = localStorage.getItem('cs16_nickname') || 'Oyuncu';
+            const actualRole = role || (room.isHost ? 'host' : 'guest');
+
+            if (actualRole === 'host') {
+                setupHostRelay(room, curNick);
+                const botCmd = isVs ? 'bot_quota 0; bot_kick;' : 'bot_quota 4; bot_difficulty 1;';
+                if (window.csCmd) {
+                    window.csCmd(`name "${curNick}"; maxplayers ${maxP}; mp_autoteambalance 1; mp_limitteams 1; sv_lan 0; ${botCmd} map ${room.map}`);
+                }
+            } else {
+                setupGuestRelay(room, curNick, preselectedTeam);
+            }
+
+            setTimeout(() => {
+                if (window.csCmd) {
+                    if (isVs) {
+                        window.csCmd('bot_quota 0; bot_kick; mp_autoteambalance 1; mp_limitteams 1; mp_freezetime 2; mp_roundtime 1.75; mp_startmoney 16000; crosshair 1; unpause; ui_renderworld 1');
+                    } else {
+                        window.csCmd('mp_autoteambalance 1; mp_limitteams 1; crosshair 1; unpause; ui_renderworld 1');
+                    }
+                    if (preselectedTeam) {
+                        window.csCmd(`jointeam ${preselectedTeam}; joinclass 1; crosshair 1; ui_renderworld 1`);
+                    }
+                }
+
+                // Show team selection for every player joining the room!
+                const hudPicker = document.getElementById('cs-hud-team-picker');
+                if (hudPicker) {
+                    hudPicker.style.display = 'block';
+                    const infoEl = document.getElementById('cs-hud-team-info');
+                    if (infoEl) infoEl.innerText = `Oda: ${room.name} (${room.map}) | Limit: ${halfP} Terörist vs ${halfP} Polis`;
+                }
+
+                window.teamPickTimeout = setTimeout(() => {
+                    const picker = document.getElementById('cs-hud-team-picker');
+                    if (picker && picker.style.display === 'block') {
+                        window.selectHudTeam(preselectedTeam || '5');
+                    }
+                }, 12000);
+            }, 1800);
+        };
+
+        window.exitGame = function() {
+            window.isInMatch = false;
+            if (window.activeMultiplayerWs) {
+                try { window.activeMultiplayerWs.close(); } catch(e) {}
+                window.activeMultiplayerWs = null;
+            }
+            window.currentMultiplayerRole = null;
+            window.multiplayerRoom = null;
+            try {
+                if (document.exitPointerLock) document.exitPointerLock();
+            } catch(e) {}
+            try {
+                if (document.fullscreenElement && document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            } catch(e) {}
+            // Clean reload back to the original soldier lobby - eliminates black screen 100%
+            window.location.reload();
+        };
+
+        function escapeHtml(str) {
+            return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+
+                window.openMenu = function() {
+            if (!window.isInMatch) return;
+            window.isMenuOpen = true;
+            const modal = document.getElementById('cs-menu-overlay');
+            const mapsDiv = document.getElementById('cs-menu-maps');
+            const botsDiv = document.getElementById('cs-menu-bots');
+            const multiInfo = document.getElementById('cs-menu-multi-info');
+            const titleEl = document.getElementById('cs-menu-title');
+            const subTitleEl = document.getElementById('cs-menu-subtitle');
+
+            if (window.isMultiplayerMatch) {
+                // In Multiplayer: Hide bot and map change cheats
+                if (mapsDiv) mapsDiv.style.display = 'none';
+                if (botsDiv) botsDiv.style.display = 'none';
+                if (titleEl) titleEl.innerText = '🌐 Multiplayer Oda Menüsü';
+                if (subTitleEl) subTitleEl.innerText = 'Çok oyunculu odadasın. Adil oyun için bot ve takım değiştirme kapalıdır:';
+                if (multiInfo) {
+                    multiInfo.style.display = 'block';
+                    const curRoom = window.activeMatchRoom;
+                    const maxP = curRoom?.maxPlayers || 16;
+                    const halfP = Math.floor(maxP / 2);
+                    multiInfo.innerHTML = `
+                        <div style="background: #222; border: 1px solid #ffcc00; border-radius: 8px; padding: 12px; text-align: left; margin-bottom: 16px;">
+                            <div style="font-size: 15px; font-weight: bold; color: #ffcc00;">🏆 ${escapeHtml(curRoom?.name || 'Çok Oyunculu Oda')}</div>
+                            <div style="font-size: 12px; color: #ccc; margin-top: 4px;">🗺️ Harita: <b>${curRoom?.map || 'de_dust2'}</b> | Mod: <b>${curRoom?.mode === 'vs' ? '⚔️ VS Kapışma (Botsuz)' : '🤖 Botlu'}</b></div>
+                            <div style="font-size: 11px; color: #2ecc71; margin-top: 2px;">👥 Kapasite: <b>${maxP} Kişi</b> (Eşit Dağılım: ${halfP} Terörist vs ${halfP} Polis)</div>
+                        </div>
+                    `;
+                }
+            } else {
+                // In Normal Mode (Training Room): Show all bot and map buttons!
+                if (mapsDiv) mapsDiv.style.display = 'grid';
+                if (botsDiv) botsDiv.style.display = 'grid';
+                if (multiInfo) multiInfo.style.display = 'none';
+                if (titleEl) titleEl.innerText = '⚡ Counter-Strike 1.6 Menü';
+                if (subTitleEl) subTitleEl.innerText = 'Fare ekrana geldi! İstediğin işlemi seç ve oyuna dön:';
+            }
+
+            if (modal) modal.style.display = 'flex';
+            try {
+                if (document.pointerLockElement && document.exitPointerLock) {
+                    document.exitPointerLock();
+                }
+            } catch(e) {}
+        };
+
+        window.closeMenu = function() {
+            window.isClosingMenu = true;
+            window.isMenuOpen = false;
+            const modal = document.getElementById('cs-menu-overlay');
+            if (modal) modal.style.display = 'none';
+            try {
+                if (window.csCmd) window.csCmd('unpause; ui_renderworld 1');
+            } catch(e) {}
+            const canvas = document.getElementById('canvas');
+            if (canvas && canvas.requestPointerLock) {
+                try { canvas.requestPointerLock(); } catch(e) {}
+            }
+            setTimeout(() => { window.isClosingMenu = false; }, 300);
+        };
+
+        window.toggleMenu = function() {
+            const modal = document.getElementById('cs-menu-overlay');
+            if (modal && modal.style.display === 'flex') {
+                window.closeMenu();
+            } else {
+                window.openMenu();
+            }
+        };
+
+        window.toggleFullscreen = async function() {
+            try {
+                if (!document.fullscreenElement) {
+                    if (document.documentElement.requestFullscreen) {
+                        await document.documentElement.requestFullscreen();
+                    } else if (document.documentElement.webkitRequestFullscreen) {
+                        await document.documentElement.webkitRequestFullscreen();
+                    }
+                    if ('keyboard' in navigator && 'lock' in navigator.keyboard) {
+                        await navigator.keyboard.lock(['Escape']);
+                    }
+                } else {
+                    if ('keyboard' in navigator && 'unlock' in navigator.keyboard) {
+                        navigator.keyboard.unlock();
+                    }
+                    if (document.exitFullscreen) {
+                        await document.exitFullscreen();
+                    }
+                }
+            } catch (e) {
+                console.warn('Fullscreen toggle warning:', e);
+            }
+        };
+
+        // 1. Intercept Escape, F2, F11 for our menu
+        const origAddEventListener = EventTarget.prototype.addEventListener;
+
+        origAddEventListener.call(window, 'keydown', function(e) {
+            const hudPicker = document.getElementById('cs-hud-team-picker');
+            if (hudPicker && hudPicker.style.display === 'block') {
+                if (e.key === '1' || e.code === 'Digit1' || e.code === 'Numpad1') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window.selectHudTeam('1');
+                    return false;
+                }
+                if (e.key === '2' || e.code === 'Digit2' || e.code === 'Numpad2') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window.selectHudTeam('2');
+                    return false;
+                }
+                if (e.key === '5' || e.code === 'Digit5' || e.code === 'Numpad5') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window.selectHudTeam('5');
+                    return false;
+                }
+            }
+
+            const isEsc = e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
+            const isF2 = e.key === 'F2' || e.code === 'F2' || e.keyCode === 113;
+            const isF11 = e.key === 'F11' || e.code === 'F11' || e.keyCode === 122;
+
+            if (isEsc) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                const teamModal = document.getElementById('cs-team-picker-modal');
+                if (teamModal && teamModal.style.display === 'flex') {
+                    window.closeTeamPicker();
+                    return false;
+                }
+                const roomsModal = document.getElementById('cs-rooms-modal');
+                if (roomsModal && roomsModal.style.display === 'flex') {
+                    window.closeRoomsModal();
+                    return false;
+                }
+                if (window.isInMatch) {
+                    window.toggleMenu();
+                }
+                return false;
+            }
+
+            if (isF2) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                if (window.isInMatch) {
+                    window.toggleMenu();
+                }
+                return false;
+            }
+
+            if (isF11) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                window.toggleFullscreen();
+                return false;
+            }
+        }, true);
+
+        origAddEventListener.call(window, 'keyup', function(e) {
+            const isEsc = e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
+            if (isEsc) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                return false;
+            }
+        }, true);
+
+        // 2. Shield Emscripten / Xash3D: NEVER let any subsequent listener receive Escape!
+                EventTarget.prototype.addEventListener = function(type, listener, options) {
+            if (type === 'keydown' || type === 'keyup' || type === 'keypress') {
+                const wrappedListener = function(event) {
+                    const t = event.target;
+                    const tag = t ? (t.tagName || '').toUpperCase() : '';
+                    const isInputField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+                    if (isInputField) {
+                        // User is typing in an input field: NEVER let Emscripten or Xash3D intercept, suppress, or preventDefault!
+                        return;
+                    }
+
+                    const isEsc = event.key === 'Escape' || event.code === 'Escape' || event.keyCode === 27;
+                    if (isEsc) {
+                        return; // Completely hide Escape from Xash3D engine
+                    }
+                    return listener.apply(this, arguments);
+                };
+                return origAddEventListener.call(this, type, wrappedListener, options);
+            }
+            return origAddEventListener.call(this, type, listener, options);
+        };
+
+        // 3. Keep Escape locked in Fullscreen
+        document.addEventListener('fullscreenchange', async () => {
+            if (document.fullscreenElement) {
+                if ('keyboard' in navigator && 'lock' in navigator.keyboard) {
+                    try { await navigator.keyboard.lock(['Escape']); } catch(e) {}
+                }
+            } else {
+                if ('keyboard' in navigator && 'unlock' in navigator.keyboard) {
+                    try { navigator.keyboard.unlock(); } catch(e) {}
+                }
+            }
+        });
+
+        // 4. Pointer lock release handler
+        document.addEventListener('pointerlockchange', () => {
+            if (window.isClosingMenu) return;
+            if (!window.isInMatch) return; // Never trigger in main menu lobby!
+            if (!document.pointerLockElement) {
+                const rModal = document.getElementById('cs-rooms-modal');
+                const tModal = document.getElementById('cs-team-picker-modal');
+                const modal = document.getElementById('cs-menu-overlay');
+                if ((!rModal || rModal.style.display !== 'flex') &&
+                    (!tModal || tModal.style.display !== 'flex') &&
+                    (!modal || modal.style.display !== 'flex')) {
+                    window.openMenu();
+                }
+            }
+        });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/xash3d-fwgs@1.0.1/dist/raw.js"></script>
+</head>
+<body>
+    <div id="loading-overlay">
+        <div id="cs-title">COUNTER-STRIKE 1.6</div>
+        <div id="progress-container">
+            <div id="progress-bar"></div>
+        </div>
+        <div id="loading-status">Preparing to load...</div>
+        <button id="fullscreen-btn">Go Fullscreen</button>
+    </div>
+
+    <!-- Floating Menu Pill -->
+    <!-- Floating Menu Pill -->
+    <div id="cs-quick-bar" style="position: fixed; top: 12px; right: 15px; z-index: 2147483646; display: none;">
+        <button class="cs-bar-btn cs-bar-btn-primary" style="font-size: 13px; padding: 7px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.6);" onclick="window.openMenu()">⚡ Menü / Ayarlar (F2 / Esc)</button>
+    </div>
+
+    <!-- Fullscreen Interactive Modal Menu -->
+    <div id="cs-menu-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 2147483647; pointer-events: auto; align-items: center; justify-content: center; font-family: Arial, sans-serif;">
+        <div style="background: #181818; border: 2px solid #ffcc00; border-radius: 12px; padding: 25px; width: 520px; max-width: 90vw; box-shadow: 0 15px 50px rgba(0,0,0,0.9); text-align: center; color: #fff;">
+                        <h2 id="cs-menu-title" style="margin: 0 0 8px; color: #ffcc00; font-size: 22px; letter-spacing: 0.5px;">⚡ Counter-Strike 1.6 Menü</h2>
+            <p id="cs-menu-subtitle" style="color: #bbb; font-size: 13px; margin: 0 0 20px;">Fare ekrana geldi! İstediğin işlemi seç ve oyuna dön:</p>
+            
+            <div id="cs-menu-multi-info" style="display: none;"></div>
+
+            <div id="cs-menu-maps" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;">
+                <button class="cs-modal-btn" style="background: #ffcc00; color: #000; font-weight: bold; grid-column: span 2; font-size: 15px;" onclick="window.startMap('de_dust2')">🗺️ de_dust2 Başlat</button>
+                <button class="cs-modal-btn" onclick="window.startMap('cs_assault')">🏢 cs_assault</button>
+                <button class="cs-modal-btn" onclick="window.startMap('cs_italy')">🍕 cs_italy</button>
+                <button class="cs-modal-btn" onclick="window.startMap('cs_office')">🏬 cs_office</button>
+                <button class="cs-modal-btn" onclick="window.startMap('de_inferno')">🔥 de_inferno</button>
+            </div>
+
+            <div id="cs-menu-bots" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;">
+                <button class="cs-modal-btn" style="background: #8b2222; color: #fff;" onclick="window.csCmd('jointeam 1; joinclass 1; crosshair 1'); window.closeMenu();">🔴 Terörist Ol (T)</button>
+                <button class="cs-modal-btn" style="background: #1e488b; color: #fff;" onclick="window.csCmd('jointeam 2; joinclass 1; crosshair 1'); window.closeMenu();">🔵 Polis Ol (CT)</button>
+                <button class="cs-modal-btn" style="background: #6a1b9a; color: #fff; font-weight: bold;" onclick="window.csCmd('bot_add_t'); window.closeMenu();">🤖 +1 Terörist Bot (T)</button>
+                <button class="cs-modal-btn" style="background: #1565c0; color: #fff; font-weight: bold;" onclick="window.csCmd('bot_add_ct'); window.closeMenu();">🤖 +1 Polis Bot (CT)</button>
+                <button class="cs-modal-btn" style="background: #b71c1c; color: #fff; font-weight: bold; grid-column: span 2;" onclick="window.setVsMode()">⚔️ VS Modu (Botları Kapat - Full Kapışma)</button>
+                <button class="cs-modal-btn" style="background: #ffaa00; color: #000; font-weight: bold;" onclick="window.csCmd('bot_add_t; bot_add_t; bot_add_ct; bot_add_ct'); window.closeMenu();">👥 4 Bot Ekle</button>
+                <button class="cs-modal-btn" style="background: #444; color: #ff6666; font-weight: bold;" onclick="window.csCmd('bot_kick'); window.closeMenu();">🛑 Botları At (Kick)</button>
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+                <button class="cs-modal-btn" style="flex: 1; background: #1e4b7a; color: #fff;" onclick="window.csCmd('toggleconsole'); window.closeMenu();">⌨️ Konsol (~)</button>
+                <button class="cs-modal-btn" style="flex: 1; background: #333; color: #ffcc00; border: 1px solid #ffcc00;" onclick="window.toggleFullscreen()">⛶ Tam Ekran (F11)</button>
+                <button class="cs-modal-btn" style="flex: 1; background: #2c3e50; color: #5dade2; border: 1px solid #5dade2;" onclick="window.csCmd('unpause; ui_renderworld 1; crosshair 1'); window.closeMenu();">🔄 Ekranı Çöz</button>
+            </div>
+
+            <button style="width: 100%; padding: 13px; background: #28a745; color: #fff; font-weight: bold; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#218838'" onmouseout="this.style.background='#28a745'" onclick="window.closeMenu()">▶ OYUNA DÖN (Fareyi Kilitle)</button>
+            <button class="cs-modal-btn" style="width: 100%; margin-top: 10px; background: #8b0000; color: #fff; font-weight: bold; font-size: 14px; border: 1px solid #ff4444;" onclick="window.exitGame()">🚪 Oyundan Çık / Lobiye Dön</button>
+            <p style="color: #888; font-size: 11px; margin: 12px 0 0 0;">İstediğin an bu menüyü açıp fareyi çıkarmak için <b>F2</b> veya <b>Esc</b> tuşuna basabilirsin.</p>
+        </div>
+    </div>
+
+        
+    <!-- In-Game Team Selector for Rooms (Select a Team 8 vs 8) -->
+    <div id="cs-hud-team-picker" style="display: none; position: fixed; top: 30px; left: 50%; transform: translateX(-50%); z-index: 2147483645; background: rgba(18, 18, 18, 0.95); border: 2px solid #ffcc00; border-radius: 12px; padding: 20px 28px; color: #fff; font-family: Arial, sans-serif; box-shadow: 0 10px 40px rgba(0,0,0,0.9); text-align: center; max-width: 90vw;">
+        <div style="font-size: 18px; font-weight: bold; color: #ffcc00; margin-bottom: 6px;">🎯 Takımını Seç (Select a Team)</div>
+        <div id="cs-hud-team-info" style="font-size: 13px; color: #bbb; margin-bottom: 16px;">Odaya katıldın! İstediğin tarafa tıkla veya klavyeden 1 / 2 / 5 bas:</div>
+        <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+            <button class="cs-modal-btn" style="background: #8b2222; color: #fff; font-weight: bold; padding: 12px 22px; font-size: 15px; border: 1px solid #ff4444;" onclick="window.selectHudTeam('1')">
+                🔴 1. Terörist (T)
+            </button>
+            <button class="cs-modal-btn" style="background: #1e488b; color: #fff; font-weight: bold; padding: 12px 22px; font-size: 15px; border: 1px solid #44aaff;" onclick="window.selectHudTeam('2')">
+                🔵 2. Polis (CT)
+            </button>
+            <button class="cs-modal-btn" style="background: #2a2a2a; color: #ffcc00; font-weight: bold; padding: 12px 22px; font-size: 15px; border: 1px solid #ffcc00;" onclick="window.selectHudTeam('5')">
+                🎲 5. Otomatik Seç
+            </button>
+        </div>
+    </div>
+
+    <!-- Custom In-Game Visible Mouse Cursor -->
+    <div id="cs-custom-cursor">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 3L11.5 21L14.5 13.5L22 10.5L4 3Z" fill="#ffcc00" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+    </div>
+    
+    <!-- Online Oda & Lobi Modalı (Multiplayer'a basınca açılır) -->
+    <div id="cs-rooms-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 2147483648; pointer-events: auto; align-items: center; justify-content: center; font-family: Arial, sans-serif;">
+        <div style="background: #141414; border: 2px solid #ffcc00; border-radius: 12px; width: 720px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.9); color: #fff; overflow: hidden;">
+            <!-- Header -->
+            <div style="padding: 16px 20px; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; background: #1a1a1a;">
+                <div>
+                    <h2 style="margin: 0; color: #ffcc00; font-size: 20px; display: flex; align-items: center; gap: 8px;">
+                        <span>🌐</span> Counter-Strike 1.6 Multiplayer & Oda Sistemi
+                    </h2>
+                    <p style="margin: 4px 0 0; color: #aaa; font-size: 12px;">Okulda veya internette arkadaşlarınla botsuz 1v1 / VS kapış!</p>
+                </div>
+                <button onclick="window.closeRoomsModal()" style="background: none; border: none; color: #aaa; font-size: 24px; cursor: pointer; padding: 0 6px;">&times;</button>
+            </div>
+
+            <!-- Nickname / Kullanıcı Adı Barı (Doğrudan Oyun Dosyaları Motoruna Bağlı) -->
+            <div style="background: #1e1e1e; padding: 12px 20px; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <label for="cs-player-nick" style="font-size: 13px; color: #ffcc00; font-weight: bold;">👤 Oyuncu Adın (Nick):</label>
+                    <input type="text" id="cs-player-nick" maxlength="16" placeholder="Kullanıcı Adı Gir" style="padding: 7px 12px; background: #282828; border: 1px solid #555; border-radius: 6px; color: #fff; font-size: 13px; font-weight: bold; width: 170px;" onchange="window.setPlayerName(this.value)">
+                    <button class="cs-bar-btn cs-bar-btn-primary" onclick="window.saveNickFromInput()" style="padding: 7px 14px; font-size: 12px;">💾 Kaydet</button>
+                </div>
+                <div id="nick-save-status" style="font-size: 12px; color: #2ecc71; font-weight: bold;"></div>
+            </div>
+
+            <!-- Tabs -->
+            <div style="display: flex; border-bottom: 1px solid #333; background: #1f1f1f;">
+                <button id="tab-btn-public" onclick="window.switchRoomTab('public')" style="flex: 1; padding: 12px; background: #2a2a2a; color: #ffcc00; border: none; border-bottom: 2px solid #ffcc00; font-weight: bold; cursor: pointer; font-size: 14px;">🌐 Canlı Public Odalar</button>
+                <button id="tab-btn-create" onclick="window.switchRoomTab('create')" style="flex: 1; padding: 12px; background: #1a1a1a; color: #888; border: none; font-weight: bold; cursor: pointer; font-size: 14px;">➕ Yeni Oda Kur</button>
+            </div>
+
+            <!-- Tab 1: Public Rooms List -->
+            <div id="room-tab-public" style="padding: 20px; overflow-y: auto; flex: 1; min-height: 320px;">
+                <div style="display: flex; gap: 10px; margin-bottom: 16px;">
+                    <input type="text" id="room-search-input" placeholder="Oda adı veya harita ara..." oninput="window.filterRooms()" style="flex: 1; padding: 10px 14px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 13px;">
+                    <button class="cs-bar-btn" onclick="window.refreshRooms()" style="padding: 10px 16px;">🔄 Yenile</button>
+                    <button class="cs-bar-btn cs-bar-btn-primary" onclick="window.switchRoomTab('create')" style="padding: 10px 16px;">➕ Oda Kur</button>
+                </div>
+
+                <div id="rooms-list-container" style="display: flex; flex-direction: column; gap: 10px;">
+                    <!-- Dynamically populated room cards -->
+                </div>
+            </div>
+
+            <!-- Tab 2: Create Room Form -->
+            <div id="room-tab-create" style="display: none; padding: 20px; overflow-y: auto; flex: 1;">
+                <form id="create-room-form" onsubmit="window.handleCreateRoom(event)" style="display: flex; flex-direction: column; gap: 14px;">
+                    <div>
+                        <label style="display: block; font-size: 13px; color: #ffcc00; margin-bottom: 6px; font-weight: bold;">Oda Adı:</label>
+                        <input type="text" id="cr-name" required placeholder="Örn: Ensar Okul 1v1 Kapışma" value="Ensar VS Arenası" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;">
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div>
+                            <label style="display: block; font-size: 13px; color: #ffcc00; margin-bottom: 6px; font-weight: bold;">Oda Şifresi (İsteğe Bağlı):</label>
+                            <input type="password" id="cr-password" placeholder="Boş bırakırsan şifresiz olur" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; color: #ffcc00; margin-bottom: 6px; font-weight: bold;">Harita Seçimi:</label>
+                            <select id="cr-map" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;">
+                                <option value="de_dust2" selected>de_dust2 (En Popüler)</option>
+                                <option value="cs_assault">cs_assault</option>
+                                <option value="cs_italy">cs_italy</option>
+                                <option value="cs_office">cs_office</option>
+                                <option value="de_inferno">de_inferno</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div>
+                            <label style="display: block; font-size: 13px; color: #ffcc00; margin-bottom: 6px; font-weight: bold;">Oyun Modu:</label>
+                            <select id="cr-mode" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;">
+                                <option value="vs" selected>⚔️ VS Modu (Bot Yok - Full İnsan VS)</option>
+                                <option value="bots">🤖 Botlu Karışık Mod</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; color: #ffcc00; margin-bottom: 6px; font-weight: bold;">İlk Takımın:</label>
+                            <select id="cr-team" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;">
+                                <option value="1">🔴 Terörist (T)</option>
+                                <option value="2">🔵 Polis (CT)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style="display: block; font-size: 13px; color: #ffcc00; margin-bottom: 6px; font-weight: bold;">Max Oyuncu Kapasitesi:</label>
+                        <select id="cr-players" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;">
+                            <option value="2" selected>2 Oyuncu (1v1 Kapışma)</option>
+                            <option value="4">4 Oyuncu (2v2 Turnuva)</option>
+                            <option value="10">10 Oyuncu (5v5 Klasik)</option>
+                            <option value="16">16 Oyuncu (Maksimum Kaos)</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" style="margin-top: 10px; width: 100%; padding: 14px; background: linear-gradient(90deg, #ffaa00, #ffcc00); color: #000; font-weight: bold; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 15px rgba(255,204,0,0.3);">
+                        🚀 Odayı Kur ve Hemen Başlat
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Takım Seçim Modalı -->
+    <div id="cs-team-picker-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 2147483649; pointer-events: auto; align-items: center; justify-content: center; font-family: Arial, sans-serif;">
+        <div style="background: #181818; border: 2px solid #ffcc00; border-radius: 12px; padding: 25px; width: 440px; max-width: 90vw; text-align: center; color: #fff; box-shadow: 0 15px 50px rgba(0,0,0,0.9);">
+            <h3 style="margin: 0 0 6px; color: #ffcc00; font-size: 20px;">🎯 Takımını Seç</h3>
+            <p id="team-picker-room-title" style="color: #bbb; font-size: 13px; margin: 0 0 20px;">Odaya katılırken hangi tarafta olmak istersin?</p>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                <button class="cs-modal-btn" style="background: #8b2222; color: #fff; font-size: 15px; font-weight: bold; padding: 16px;" onclick="window.confirmJoinWithTeam('1')">
+                    🔴 Terörist (T)
+                </button>
+                <button class="cs-modal-btn" style="background: #1e488b; color: #fff; font-size: 15px; font-weight: bold; padding: 16px;" onclick="window.confirmJoinWithTeam('2')">
+                    🔵 Polis (CT)
+                </button>
+            </div>
+
+            <button class="cs-modal-btn" style="width: 100%; background: #333; color: #aaa;" onclick="window.closeTeamPicker()">İptal</button>
+        </div>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script type="module">
+        import JSZip from 'https://cdn.skypack.dev/jszip@3.10.1';
+
+        const loadingStatus = document.getElementById('loading-status');
+        const progressBar = document.getElementById('progress-bar');
+
+        function updateStatus(msg) {
+            loadingStatus.innerText = msg;
+        }
+
+        function updateProgress(percent) {
+            progressBar.style.width = percent + "%";
+        }
+
+        async function main() {
+            const overlay = document.getElementById('loading-overlay');
+            const canvas = document.getElementById('canvas');
+            const fullscreenBtn = document.getElementById('fullscreen-btn');
+
+            async function requestDocFullscreen() {
+                try {
+                    if (!document.fullscreenElement) {
+                        if (document.documentElement.requestFullscreen) {
+                            await document.documentElement.requestFullscreen();
+                        } else if (document.documentElement.webkitRequestFullscreen) {
+                            await document.documentElement.webkitRequestFullscreen();
+                        }
+                    }
+                    if ('keyboard' in navigator && 'lock' in navigator.keyboard) {
+                        await navigator.keyboard.lock(['Escape']);
+                    }
+                } catch (err) {
+                    console.warn('Fullscreen/KeyboardLock error:', err);
+                }
+            }
+
+            try {
+                updateStatus("Fetching game assets...");
+                const res = await fetch('./valve.zip');
+                const buffer = await res.arrayBuffer();
+
+                updateStatus("Extracting game files...");
+                const zip = await JSZip.loadAsync(buffer);
+                const files = {};
+
+                const entries = Object.keys(zip.files);
+                let totalFiles = entries.length;
+                let loaded = 0;
+
+                await Promise.all(entries.map(async p => {
+                    const file = zip.files[p];
+                    if (file.dir) return;
+                    files[`/rodir/${p}`] = await file.async("uint8array");
+                    loaded++;
+                    updateProgress(Math.floor((loaded / totalFiles) * 100));
+                    updateStatus(`Loading files... (${loaded}/${totalFiles})`);
+                }));
+
+                updateStatus("Initializing game engine...");
+
+                Xash3D({
+                    arguments: ['-windowed', '+name', (localStorage.getItem('cs16_nickname') || 'Oyuncu'), '-game', 'cstrike', '+maxplayers', '16', '+mp_limitteams', '0', '+mp_autoteambalance', '0', '+gl_check_errors', '0', '+bot_quota_mode', 'normal', '+bot_join_after_player', '0', '+crosshair', '1', '+cl_crosshair_color', '0 255 0', '+cl_crosshair_size', '2', '+cl_observercrosshair', '1', '+_vgui_menus', '0', '+ui_renderworld', '1', '+unbind', 'ESCAPE', '-ref', 'gles3compat'], 
+                    canvas,
+                    ctx: (canvas.getContext('webgl2', {
+                        alpha: false,
+                        depth: true,
+                        stencil: true,
+                        antialias: true
+                    }) || canvas.getContext('webgl', {
+                        alpha: false,
+                        depth: true,
+                        stencil: true,
+                        antialias: true
+                    })),
+                    dynamicLibraries: [
+                        "filesystem_stdio.wasm",
+                        "libref_gles3compat.wasm",
+                        "cl_dlls/menu_emscripten_wasm32.wasm",
+                        "dlls/cs_emscripten_wasm32.so",
+                        "cl_dlls/client_emscripten_wasm32.wasm",
+                        "/rodir/filesystem_stdio.so",
+                        "/rwdir/filesystem_stdio.so",
+                    ],
+                    onRuntimeInitialized: function () {
+                        if (this.FS && this.FS.createStream) {
+                            const origCreateStream = this.FS.createStream;
+                            this.FS.createStream = function(stream, fd) {
+                                const s = origCreateStream.call(this, stream, fd);
+                                if (s && s.node && s.node.sock) {
+                                    const sock = s.node.sock;
+                                    window.activeSockets = window.activeSockets || [];
+                                    if (!window.activeSockets.includes(sock)) {
+                                        window.activeSockets.push(sock);
+                                    }
+                                    if (sock.sock_ops && typeof hookSockOps === 'function') {
+                                        hookSockOps(sock.sock_ops);
+                                    }
+                                }
+                                return s;
+                            };
+                        }
+
+                        Object.keys(files).forEach(k => {
+                            const dir = k.split('/').slice(0, -1).join('/');
+                            this.FS.mkdirTree(dir);
+                            this.FS.writeFile(k, files[k]);
+                        });
+                        this.FS.chdir('/rodir');
+
+                        updateProgress(100);
+                        updateStatus("Ready! Click 'Go Fullscreen' to play.");
+                        fullscreenBtn.style.display = 'inline-block';
+
+                        fullscreenBtn.addEventListener('click', async () => {
+                            await requestDocFullscreen();
+                            overlay.style.opacity = 0;
+                            setTimeout(() => overlay.remove(), 500);
+                            canvas.style.opacity = 1;
+                            const bar = document.getElementById('cs-quick-bar');
+                            if (bar) bar.style.display = 'flex';
+                            // Don't lock pointer in main menu so user can click buttons!
+                        });
+
+                        canvas.addEventListener('click', () => {
+                            if (!window.isInMatch) return; // In main menu lobby, never lock pointer!
+                            const rModal = document.getElementById('cs-rooms-modal');
+                            const mModal = document.getElementById('cs-menu-overlay');
+                            const tModal = document.getElementById('cs-team-picker-modal');
+                            if ((rModal && rModal.style.display === 'flex') ||
+                                (mModal && mModal.style.display === 'flex') ||
+                                (tModal && tModal.style.display === 'flex')) {
+                                return;
+                            }
+                            if (!document.pointerLockElement) {
+                                try {
+                                    if (window.csCmd) window.csCmd('unpause; ui_renderworld 1');
+                                } catch(e) {}
+                                if (canvas.requestPointerLock) canvas.requestPointerLock();
+                            }
+                        });
+
+                        const engine = this;
+                        window.xash = engine;
+                        setTimeout(() => {
+                            if (window.csCmd) window.csCmd('ui_renderworld 1; unbind ESCAPE; bind ESCAPE ""; alias hazardcourse "maxplayers 16; bot_quota 4; map de_dust2"; alias training "maxplayers 16; bot_quota 4; map de_dust2"; hud_draw 1; crosshair 1');
+                        }, 500);
+                        window.csCmd = (c) => {
+                            try {
+                                const cmds = c.split(';');
+                                for (const singleCmd of cmds) {
+                                    const trimmed = singleCmd.trim();
+                                    if (!trimmed) continue;
+                                    if (engine && engine.ccall) {
+                                        engine.ccall('Cmd_ExecuteString', null, ['string'], [trimmed]);
+                                    } else if (engine && engine.Cmd_ExecuteString) {
+                                        engine.Cmd_ExecuteString(trimmed);
+                                    } else if (window.xash && window.xash.ccall) {
+                                        window.xash.ccall('Cmd_ExecuteString', null, ['string'], [trimmed]);
+                                    }
+                                }
+                            } catch(err) {
+                                console.error('CS Command Error:', err);
+                            }
+                        };
+
+                        window.startMap = (mapName) => {
+                            window.isInMatch = true;
+                            window.isMultiplayerMatch = false;
+                            window.activeMatchRoom = null;
+                            const hudPicker = document.getElementById('cs-hud-team-picker');
+                            if (hudPicker) hudPicker.style.display = 'none';
+                            if (window.csCmd) {
+                                window.csCmd('maxplayers 16; mp_autoteambalance 0; mp_limitteams 0; bot_quota 4; map ' + mapName);
+                            }
+                            setTimeout(() => {
+                                if (window.csCmd) window.csCmd('jointeam 5; joinclass 5; crosshair 1; unpause; ui_renderworld 1');
+                                const canvas = document.getElementById('canvas');
+                                if (canvas && canvas.requestPointerLock) canvas.requestPointerLock();
+                            }, 1800);
+                            window.closeMenu();
+                        };
+                    },
+                    locateFile: (p) => {
+                        switch (p) {
+                            case 'xash.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/xash3d-fwgs@1.0.1/dist/xash.wasm';
+                            case '/rodir/filesystem_stdio.so':
+                            case '/rwdir/filesystem_stdio.so':
+                            case 'filesystem_stdio.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/xash3d-fwgs@1.0.1/dist/filesystem_stdio.wasm';
+                            case 'libref_gles3compat.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/xash3d-fwgs@1.0.1/dist/libref_gles3compat.wasm';
+                            case 'cl_dlls/menu_emscripten_wasm32.wasm':
+                                return './cl_dlls/menu_emscripten_wasm32.wasm';
+                            case 'dlls/cs_emscripten_wasm32.so':
+                                return 'https://cdn.jsdelivr.net/npm/cs16-client@0.0.2/dist/dlls/cs_emscripten_wasm32.so';
+                            case 'cl_dlls/client_emscripten_wasm32.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/cs16-client@0.1.2/dist/cstrike/cl_dlls/client_emscripten_wasm32.wasm';
+                            default:
+                                return p;
+                        }
+                    },
+                });
+            } catch (e) {
+                updateStatus("Failed to load game. Check console.");
+                console.error("Failed to load game:", e);
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "cs16-web",
+  "version": "1.0.0",
+  "description": "Counter-Strike 1.6 Web Multiplayer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
