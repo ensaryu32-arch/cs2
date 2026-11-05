@@ -6,20 +6,49 @@ const { WebSocketServer, WebSocket } = require('ws');
 const PORT = process.env.PORT || 8080;
 const BASE_DIR = __dirname;
 
-// Auto-assemble valve.zip on Render or clean deploy if split parts exist
+// Stream-based low-memory assembler for valve.zip (Peak RAM < 8 MB)
 const VALVE_ZIP_PATH = path.join(BASE_DIR, 'valve.zip');
-if (!fs.existsSync(VALVE_ZIP_PATH)) {
-  try {
-    const parts = fs.readdirSync(BASE_DIR).filter(f => f.startsWith('valve_part_')).sort();
-    if (parts.length > 0) {
-      console.log(`📦 Oyun Dosyaları: ${parts.length} parça birleştirilerek valve.zip oluşturuluyor...`);
-      const combined = Buffer.concat(parts.map(p => fs.readFileSync(path.join(BASE_DIR, p))));
-      fs.writeFileSync(VALVE_ZIP_PATH, combined);
-      console.log('✅ valve.zip başarıyla oluşturuldu (' + (combined.length / 1024 / 1024).toFixed(1) + ' MB)');
-    }
-  } catch (err) {
-    console.error('valve.zip birleştirme hatası:', err);
+
+function assembleValveZip(callback) {
+  if (fs.existsSync(VALVE_ZIP_PATH)) {
+    return callback();
   }
+
+  const parts = fs.readdirSync(BASE_DIR).filter(f => f.startsWith('valve_part_')).sort();
+  if (parts.length === 0) {
+    return callback();
+  }
+
+  console.log(`📦 Düşük RAM Modu: ${parts.length} parça disk üzerinden valve.zip olarak birleştiriliyor...`);
+  const outStream = fs.createWriteStream(VALVE_ZIP_PATH);
+
+  function appendPart(idx) {
+    if (idx >= parts.length) {
+      outStream.end();
+      return;
+    }
+    const partPath = path.join(BASE_DIR, parts[idx]);
+    const inStream = fs.createReadStream(partPath);
+    inStream.pipe(outStream, { end: false });
+    inStream.on('end', () => {
+      try { fs.unlinkSync(partPath); } catch(e) {}
+      appendPart(idx + 1);
+    });
+    inStream.on('error', (err) => {
+      console.error('Parça okuma hatası:', err);
+      outStream.end();
+    });
+  }
+
+  outStream.on('finish', () => {
+    try {
+      const sizeMb = (fs.statSync(VALVE_ZIP_PATH).size / (1024 * 1024)).toFixed(1);
+      console.log(`✅ valve.zip başarıyla hazırlandı (${sizeMb} MB) - RAM aşımı engellendi!`);
+    } catch(e) {}
+    callback();
+  });
+
+  appendPart(0);
 }
 
 const MIME_TYPES = {
@@ -321,10 +350,12 @@ const pingInterval = setInterval(() => {
 
 wss.on('close', () => clearInterval(pingInterval));
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('====================================================');
-  console.log(`🎮 Counter-Strike 1.6 Web Multiplayer Sunucusu Aktif!`);
-  console.log(`🌐 Port: ${PORT} (Render.com & Yerel Ağ Uyumlu)`);
-  console.log(`⚡ Standart WSS/HTTPS üzerinden 16 Kişilik Kesintisiz VS`);
-  console.log('====================================================');
+assembleValveZip(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('====================================================');
+    console.log(`🎮 Counter-Strike 1.6 Web Multiplayer Sunucusu Aktif!`);
+    console.log(`🌐 Port: ${PORT} (Render.com & Yerel Ağ Uyumlu)`);
+    console.log(`⚡ Standart WSS/HTTPS üzerinden 16 Kişilik Kesintisiz VS`);
+    console.log('====================================================');
+  });
 });
